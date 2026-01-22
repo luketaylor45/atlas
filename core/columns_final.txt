@@ -1,0 +1,17 @@
+id
+name
+docker_image
+startup_command
+environment
+created_at
+updated_at
+description
+category
+nest_id
+stop_command
+config_files
+install_script
+install_container
+install_entrypoint
+uuid
+docker_images
