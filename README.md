@@ -3,7 +3,7 @@
 Atlas is a next-generation game server hosting panel designed for performance, modularity, and ease of use. It features a distributed architecture with a central control panel and lightweight daemon nodes.
 
 ## 🚀 Key Features
-*   **Modern Dashboard**: React-based UI with glassmorphism design and real-time updates.
+*   **Modern Dashboard**: React-based UI with modern design and real-time updates.
 *   **Infrastructure as Code**: Manage game templates ("Eggs") as JSON files with version control.
 *   **Distributed Architecture**: Run the panel on one server and deploy game nodes globally.
 *   **Docker Containerization**: Every game server runs in an isolated, secure Docker container.
@@ -18,12 +18,17 @@ Atlas is designed to run entirely within Docker for maximum reliability and cont
     ```bash
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
-    
+    ```
+
 ### 2. Installation
 Clone the repository and enter the project directory:
 ```bash
 git clone https://github.com/luketaylor45/atlas.git
 cd atlas
+```
+
+### 3. Configuration & Security
+Before launching, you **must** update the default database credentials for security.
 
 1.  Open `docker-compose.yml`.
 2.  Update the following environment variables:
