@@ -38,7 +38,7 @@ services:
     container_name: atlas_panel
     restart: always
     ports:
-      - "80:80"
+      - "3000:80"
     depends_on:
       - core
 
@@ -51,7 +51,7 @@ services:
     restart: always
     ports:
       - "8081:8081"
-      - "2022:2022"  # SFTP
+      - "2022:2022" # SFTP
     environment:
       - PORT=8081
       - CORE_URL=http://core:8080
