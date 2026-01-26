@@ -1,73 +1,73 @@
-# React + TypeScript + Vite
+# Atlas Game Server Platform
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Atlas is a next-generation game server hosting panel designed for performance, modularity, and ease of use. It features a distributed architecture with a central control panel and lightweight daemon nodes.
 
-Currently, two official plugins are available:
+## 🚀 Key Features
+*   **Modern Dashboard**: React-based UI with glassmorphism design and real-time updates.
+*   **Infrastructure as Code**: Manage game templates ("Eggs") as JSON files with version control.
+*   **Distributed Architecture**: Run the panel on one server and deploy game nodes globally.
+*   **Nested Categories**: Organize servers into customizable hierarchies (e.g., Games > Minecraft > Paper).
+*   **Docker Containerization**: Every game server runs in an isolated, secure Docker container.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 📦 Components
+*   **Panel**: The web interface (React/Vite).
+*   **Core**: The central API and database manager (Go).
+*   **Daemon**: The remote agent that runs on game nodes (Go).
+*   **Seed**: A utility to hydrate the database from the file system.
 
-## React Compiler
+## 🛠️ Installation (Ubuntu)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1.  **Clone the Repository** (or upload the files):
+    ```bash
+    git clone https://github.com/your-repo/atlas.git
+    cd atlas
+    ```
 
-## Expanding the ESLint configuration
+2.  **Run the Installer**:
+    This script will install Docker, Go, Node.js, and PostgreSQL, then build and start all services.
+    ```bash
+    bash install.sh
+    ```
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+3.  **Access the Panel**:
+    Open your browser and navigate to `http://<your-server-ip>`.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 🥚 Managing Game Templates (Eggs)
+Atlas uses a file-based structure for defining game environments. You can add new games by dropping JSON files into the `eggs/` directory.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+**Structure:**
+```text
+eggs/
+├── games/                  # Parent Category (Nest)
+│   ├── gmod/               # Sub-Category
+│   │   └── 64bit.json      # The Egg Definition
+│   └── minecraft/
+│       └── paper.json
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+**Importing:**
+During installation, the `atlas-seed` tool automatically imports this structure. Post-installation, you can manually import eggs via the **Admin > Eggs & Nests** page.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 💻 Development
+To run Atlas locally for development:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+1.  **Start the Panel**:
+    ```bash
+    cd panel
+    npm run dev
+    ```
+2.  **Start the Core**:
+    ```bash
+    cd core
+    go run cmd/server/main.go
+    ```
+3.  **Start the Daemon**:
+    ```bash
+    cd daemon
+    go run cmd/server/main.go
+    ```
+
+> Note: Ensure you have Docker Desktop running on Windows, or Docker Engine on Linux.
+
+## 📄 License
+MIT License

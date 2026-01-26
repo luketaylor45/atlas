@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Atlas Core API
+  core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: atlas_core
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DATABASE_URL=host=database user=atlas password=atlas_password dbname=atlas port=5432 sslmode=disable
+    depends_on:
+      - database
+    volumes:
+      - ./eggs:/app/eggs
+
+  # Atlas Database
+  database:
+    image: postgres:16-alpine
+    container_name: atlas_db
+    restart: always
+    environment:
+      - POSTGRES_USER=atlas
+      - POSTGRES_PASSWORD=atlas_password
+      - POSTGRES_DB=atlas
+    volumes:
+      - atlas_db_data:/var/lib/postgresql/data
+
+  # Atlas Panel (Frontend)
+  panel:
+    build:
+      context: ./panel
+      dockerfile: Dockerfile
+    container_name: atlas_panel
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - core
+
+  # Atlas Daemon (Local Node)
+  daemon:
+    build:
+      context: ./daemon
+      dockerfile: Dockerfile
+    container_name: atlas_daemon
+    restart: always
+    ports:
+      - "8081:8081"
+      - "2022:2022"  # SFTP
+    environment:
+      - PORT=8081
+      - CORE_URL=http://core:8080
+      - NODE_TOKEN=change-me
+      - SFTP_PORT=2022
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - atlas_daemon_data:/var/lib/atlas/data
+    depends_on:
+      - core
+
+volumes:
+  atlas_db_data:
+  atlas_daemon_data:
