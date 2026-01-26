@@ -134,7 +134,14 @@ func InitialSetup(c *gin.Context) {
 	// Seed default eggs as part of the setup procedure
 	database.SeedDefaults()
 
-	c.JSON(http.StatusCreated, gin.H{"message": "Admin user created and defaults seeded", "user": user})
+	// Generate token for automatic login
+	token, _ := utils.GenerateToken(user.ID, user.IsAdmin)
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Admin user created and defaults seeded",
+		"token":   token,
+		"user":    user,
+	})
 }
 
 // GetSetupStatus checks if the system needs setup

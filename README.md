@@ -1,40 +1,59 @@
 # Atlas Game Server Platform
 
-Atlas is a next-generation game server hosting panel designed for performance, modularity, and ease of use. It features a distributed architecture with a central control panel and lightweight daemon nodes.
+Atlas is a next-generation game server hosting panel designed for performance, modularity, and security.
 
 ## 🚀 Key Features
-*   **Modern Dashboard**: React-based UI with modern design and real-time updates.
 *   **Infrastructure as Code**: Manage game templates ("Eggs") as JSON files.
-*   **Distributed Architecture**: Run the panel on one server and deploy game nodes globally.
-*   **Docker Containerization**: Every game server runs in an isolated, secure Docker container.
+*   **Distributed Architecture**: Deploy multiple game nodes globally from a single panel.
+*   **Hardened Security**: Internal services (API/Database) are hidden from the public by default.
 
 ## 📦 Production Deployment (Ubuntu)
 
-Atlas is designed to run entirely within Docker. To avoid port conflicts and enable HTTPS, we recommend using an Nginx Reverse Proxy on the host.
+Atlas runs entirely within Docker Compose. For the best experience, we recommend using an Nginx Reverse Proxy on the host.
 
 ### 1. Prerequisites
 *   Ubuntu 20.04/22.04/24.04 LTS
 *   Docker & Docker Compose installed.
-*   Nginx installed on the host: `sudo apt install nginx`
+*   Nginx installed on the host.
 
-### 2. Configuration & Security
-Before launching, you **must** update the default database credentials in `docker-compose.yml`.
+### 2. Initial Configuration
+Create your environment file:
+```bash
+cp .env.example .env
+nano .env
+```
+*   **Database**: Update `DB_USER` and `DB_PASS`.
+*   **Ports**: Customize `ATLAS_PANEL_PORT` (default 4000) if needed.
+*   **Node Token**: Leave this blank or as default for the very first boot.
 
-1.  Update `POSTGRES_USER` and `POSTGRES_PASSWORD`.
-2.  Update `DATABASE_URL` in the `core` service to match.
-3.  Set a secure `NODE_TOKEN` for the `daemon`.
-
-### 3. Launching Atlas
-Start the stack in detached mode:
+### 3. First Boot (Registration)
+Start the cluster:
 ```bash
 docker-compose up -d --build
 ```
-*The panel is now running internally on port 3000.*
+Log in to your panel (e.g., `http://your-ip:4000` or your proxy domain).
 
-### 4. Reverse Proxy Setup (Subdomain)
-To attach Atlas to a subdomain (e.g., `panel.yourdomain.com`), create a new Nginx configuration:
+### 4. Setting up your Local Node
+By default, the "Daemon" service needs a specific authentication token to speak to the Core.
+1.  Navigate to **Admin > Nodes**.
+2.  Click **Create New Node**.
+3.  Fill in the details (Address should be your server's public IP).
+4.  Once created, click the **Settings icon** on the new node to view the **Node Token**.
+5.  Edit your `.env` file and paste this token into `NODE_TOKEN`.
+6.  Restart the daemon:
+    ```bash
+    docker-compose up -d daemon
+    ```
 
-`sudo nano /etc/nginx/sites-available/atlas`
+## 🛡️ Multi-Node Deployment (Global Scaling)
+To add a remote server as a game node:
+1.  On the **Remote Server**, you only need the `daemon` service and its own `docker-compose.yml`.
+2.  Register the new node in the **Central Panel** (as shown above) to get a **unique token** for that specific server.
+3.  Configure the remote daemon with your **Panel's Public URL** and the **Unique Node Token**.
+4.  Ensure port `8081` (Daemon API) and `2022` (SFTP) are open on the remote server's firewall.
+
+## 🌐 Reverse Proxy (Subdomain example)
+Point `panel.yourdomain.com` to Atlas by creating `/etc/nginx/sites-available/atlas`:
 
 ```nginx
 server {
@@ -42,7 +61,7 @@ server {
     server_name panel.yourdomain.com;
 
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://127.0.0.1:4000; # The ATLAS_PANEL_PORT
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -51,7 +70,7 @@ server {
 
     # API Proxy (Required for console/websockets)
     location /api/v1/ {
-        proxy_pass http://localhost:8080/api/v1/;
+        proxy_pass http://127.0.0.1:8080/api/v1/; # The ATLAS_CORE_PORT
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "Upgrade";
@@ -59,31 +78,6 @@ server {
     }
 }
 ```
-
-Enable the site and restart Nginx:
-```bash
-sudo ln -s /etc/nginx/sites-available/atlas /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl restart nginx
-```
-
-## 🥚 Managing Game Templates (Eggs)
-Add your JSON definitions to the `eggs/` directory on the host:
-
-```text
-eggs/
-├── games/                  # Parent Category
-│   ├── gmod/               # Sub-Category
-│   │   └── modern.json     # The Egg Definition
-│   └── minecraft/
-│       └── paper.json
-```
-
-## 🛡️ Multi-Node Deployment
-To add additional remote nodes to your Atlas cluster:
-1.  On the remote server, only deploy the `daemon` service.
-2.  Ensure the `CORE_URL` points back to your main panel's IP or subdomain.
-3.  Add the node in the **Admin > Nodes** section of the panel.
 
 ## 📄 License
 MIT License

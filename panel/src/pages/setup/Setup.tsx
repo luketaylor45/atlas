@@ -36,9 +36,16 @@ export default function SetupPage() {
         const password = formData.get('password') as string;
 
         try {
-            await api.post('/auth/setup', { username, password });
-            // After setup, redirect to login
-            navigate('/login');
+            const res = await api.post('/auth/setup', { username, password });
+
+            // Auto login if token provided
+            if (res.data.token) {
+                localStorage.setItem('token', res.data.token);
+                // Refreshing context is handled by AuthContext if we redirect to /
+                window.location.href = '/';
+            } else {
+                navigate('/login');
+            }
         } catch (err: any) {
             setError(err.response?.data?.error || 'Setup failed');
         } finally {

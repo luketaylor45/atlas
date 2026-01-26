@@ -1,7 +1,21 @@
 import axios from 'axios';
 
+const isProd = import.meta.env.PROD;
+
+// In production, we assume Nginx handles the /api/v1 proxy on the standard port.
+// If accessing directly via IP:3000, we need to explicitly point to :8080.
+let base = `${window.location.protocol}//${window.location.hostname}`;
+if (isProd) {
+    if (window.location.port === '3000') {
+        base += ':8080';
+    }
+    base += '/api/v1';
+} else {
+    base = 'http://localhost:8080/api/v1';
+}
+
 const api = axios.create({
-    baseURL: 'http://localhost:8080/api/v1',
+    baseURL: base,
     headers: {
         'Content-Type': 'application/json',
     },
