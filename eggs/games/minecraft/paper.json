@@ -1,0 +1,49 @@
+{
+    "uuid": "c3d4e5f6-a7b8-4c7d-0e1f-2a3b4c5d6e7f",
+    "name": "Paper / Spigot",
+    "description": "High-performance Minecraft server using Paper or Spigot. Supports plugins.",
+    "docker_images": [
+        "ghcr.io/pterodactyl/yolks:java_17",
+        "ghcr.io/pterodactyl/yolks:java_18",
+        "ghcr.io/pterodactyl/yolks:java_21"
+    ],
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}",
+    "stop_command": "stop",
+    "script_install": "#!/bin/bash\ncd /mnt/server\nPAPER_VERSION=${PAPER_VERSION:-1.20.4}\necho \"Downloading Paper ${PAPER_VERSION}...\"\ncurl -o server.jar -L \"https://papermc.io/api/v2/projects/paper/versions/${PAPER_VERSION}/builds/latest/downloads/paper-${PAPER_VERSION}.jar\" || echo \"Download failed, please set correct version\"\necho \"eula=true\" > eula.txt\necho \"Installation complete.\"\n",
+    "script_container": "eclipse-temurin:17-jdk",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Server MOTD",
+            "env_variable": "SERVER_MOTD",
+            "default_value": "An Atlas Minecraft Server",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "Message of the day shown in the server list"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "20",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "Maximum players allowed"
+        },
+        {
+            "name": "Server JAR File",
+            "env_variable": "SERVER_JARFILE",
+            "default_value": "server.jar",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "Name of the server JAR file"
+        },
+        {
+            "name": "Difficulty",
+            "env_variable": "DIFFICULTY",
+            "default_value": "normal",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "Game difficulty: peaceful, easy, normal, or hard"
+        }
+    ]
+}

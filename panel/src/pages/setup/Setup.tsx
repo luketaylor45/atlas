@@ -32,11 +32,11 @@ export default function SetupPage() {
         setLoading(true);
 
         const formData = new FormData(e.currentTarget);
-        const email = formData.get('email') as string;
+        const username = formData.get('username') as string;
         const password = formData.get('password') as string;
 
         try {
-            await api.post('/auth/setup', { email, password });
+            await api.post('/auth/setup', { username, password });
             // After setup, redirect to login
             navigate('/login');
         } catch (err: any) {
@@ -65,13 +65,14 @@ export default function SetupPage() {
 
                 <form onSubmit={handleSetup} className="flex flex-col gap-5">
                     <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Admin Email</label>
+                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Admin Username</label>
                         <input
-                            name="email"
-                            type="email"
+                            name="username"
+                            type="text"
                             required
+                            minLength={3}
                             className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="admin@atlas.local"
+                            placeholder="admin"
                         />
                     </div>
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import Logo from '../../components/Logo';
 import api from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
@@ -7,7 +7,7 @@ import { useAuth } from '../../context/AuthContext';
 export default function LoginPage() {
     const navigate = useNavigate();
     const { login } = useAuth();
-    const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
@@ -18,7 +18,7 @@ export default function LoginPage() {
         setLoading(true);
 
         try {
-            const res = await api.post('/auth/login', { email, password });
+            const res = await api.post('/auth/login', { username, password });
             login(res.data.token, res.data.user);
             navigate('/');
         } catch (err: any) {
@@ -47,13 +47,13 @@ export default function LoginPage() {
 
                 <form onSubmit={handleLogin} className="flex flex-col gap-5">
                     <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Email</label>
+                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Username</label>
                         <input
-                            type="email"
+                            type="text"
                             className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="name@example.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="e.g. admin"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
                         />
                     </div>
 
@@ -80,9 +80,14 @@ export default function LoginPage() {
                     </button>
                 </form>
 
-                <p className="text-center text-xs text-muted mt-8">
-                    By signing in, you agree to our <a href="#" className="underline hover:text-white">Terms of Service</a>
-                </p>
+                <div className="text-center mt-8 space-y-4">
+                    <p className="text-xs text-muted">
+                        Don't have an account? <Link to="/register" className="text-primary hover:text-primary/80 font-bold">Sign Up</Link>
+                    </p>
+                    <p className="text-xs text-muted">
+                        By signing in, you agree to our <a href="#" className="underline hover:text-white">Terms of Service</a>
+                    </p>
+                </div>
             </div>
         </div>
     );

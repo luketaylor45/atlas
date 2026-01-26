@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, Settings, LogOut, LayoutDashboard, Users, Layers, Activity, Package } from 'lucide-react';
+import { Home, Settings, LogOut, LayoutDashboard, Users, Layers, Activity, Package, Bell } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import Logo from './Logo';
@@ -47,17 +47,18 @@ export default function Layout() {
                             <SidebarItem icon={Layers} label="Services" to="/admin/services" />
                             <SidebarItem icon={Package} label="Eggs & Nests" to="/admin/eggs" />
                             <SidebarItem icon={Users} label="Users" to="/admin/users" />
+                            <SidebarItem icon={Bell} label="Announcements" to="/admin/news" />
                         </>
                     )}
                 </nav>
 
                 <div className="mt-auto border-t border-border pt-4">
                     <div className="flex items-center gap-3 p-2 mb-4 rounded-lg bg-secondary/50">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary to-purple-500 flex items-center justify-center text-xs font-bold text-white">
-                            {user?.email?.charAt(0).toUpperCase() || 'U'}
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary to-purple-500 flex items-center justify-center text-xs font-bold text-white uppercase">
+                            {user?.username?.charAt(0) || 'U'}
                         </div>
                         <div className="flex flex-col overflow-hidden">
-                            <span className="text-sm font-medium truncate" title={user?.email}>{user?.email || 'User'}</span>
+                            <span className="text-sm font-medium truncate" title={user?.username}>{user?.username || 'User Account'}</span>
                             <span className="text-xs text-muted">{user?.is_admin ? 'Administrator' : 'User'}</span>
                         </div>
                     </div>

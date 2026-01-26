@@ -34,7 +34,8 @@ func HandleHeartbeat(c *gin.Context) {
 	// Update heartbeat
 	node.IsOnline = true
 	node.LastHeartbeat = time.Now()
-	// In a real app we'd save stats too (Redis/InfluxDB)
+	node.UsedCPU = req.Stats.CPU
+	node.UsedRAM = uint64(req.Stats.RAM)
 
 	database.DB.Save(&node)
 

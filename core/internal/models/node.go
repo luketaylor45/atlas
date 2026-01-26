@@ -15,8 +15,10 @@ type Node struct {
 	Token    string `gorm:"uniqueIndex;not null" json:"-"`
 
 	// Resources
-	TotalRAM  uint64 `gorm:"not null;default:0" json:"total_ram"`  // In MB
-	TotalDisk uint64 `gorm:"not null;default:0" json:"total_disk"` // In MB
+	TotalRAM  uint64  `gorm:"not null;default:0" json:"total_ram"`  // In MB
+	TotalDisk uint64  `gorm:"not null;default:0" json:"total_disk"` // In MB
+	UsedRAM   uint64  `gorm:"default:0" json:"used_ram"`
+	UsedCPU   float64 `gorm:"default:0" json:"used_cpu"`
 
 	// Location
 	Location string `gorm:"size:255;default:'Unknown'" json:"location"` // Ensure simple string for now, maybe JSON later

@@ -4,9 +4,10 @@ import api from '../../lib/api';
 import {
     Folder, ChevronRight, Home, Upload,
     Plus, Trash2, Save, X, MoreVertical,
-    FileText, Code, Settings, CornerUpLeft, RefreshCw
+    FileText, Code, Settings, CornerUpLeft, RefreshCw, Key
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useAuth } from '../../context/AuthContext';
 
 interface FileInfo {
     name: string;
@@ -14,13 +15,15 @@ interface FileInfo {
     is_dir: boolean;
 }
 
-export default function FileManager() {
+export default function FileManager({ service }: { service: any }) {
+    const { user } = useAuth();
     const { uuid } = useParams();
     const [path, setPath] = useState('');
     const [files, setFiles] = useState<FileInfo[]>([]);
     const [loading, setLoading] = useState(true);
     const [editingFile, setEditingFile] = useState<{ name: string, content: string } | null>(null);
     const [showNewFolderModal, setShowNewFolderModal] = useState(false);
+    const [showSFTPModal, setShowSFTPModal] = useState(false);
     const [newFolderName, setNewFolderName] = useState('');
 
     const fetchFiles = async () => {
@@ -159,6 +162,12 @@ export default function FileManager() {
                 </div>
 
                 <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setShowSFTPModal(true)}
+                        className="bg-secondary text-primary border border-primary/20 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-primary/5 transition-all"
+                    >
+                        <Key size={18} /> SFTP
+                    </button>
                     <button
                         onClick={() => setShowNewFolderModal(true)}
                         className="bg-secondary text-foreground border border-border/50 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-secondary/80 transition-all"
@@ -321,6 +330,66 @@ export default function FileManager() {
                                 className="bg-primary text-white px-8 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 hover:brightness-110 transition-all"
                             >
                                 Create Folder
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* SFTP Modal */}
+            {showSFTPModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+                    <div className="bg-background border border-border/60 rounded-3xl w-full max-w-md shadow-2xl scale-in overflow-hidden">
+                        <div className="p-6 border-b border-border/50 flex items-center justify-between bg-primary/5">
+                            <div className="flex items-center gap-3">
+                                <Key className="text-primary" size={20} />
+                                <h3 className="font-bold text-lg">SFTP Connection</h3>
+                            </div>
+                            <button onClick={() => setShowSFTPModal(false)} className="p-2 hover:bg-secondary rounded-xl transition-colors"><X size={20} /></button>
+                        </div>
+                        <div className="p-8 space-y-6">
+                            <div className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl text-[10px] text-blue-500 font-medium leading-relaxed uppercase tracking-wider">
+                                Use a client like FileZilla or WinSCP to manage your server files directly over SSH.
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Server Address</label>
+                                    <div className="p-3 bg-secondary/50 border border-border rounded-xl font-mono text-xs break-all">
+                                        {service.node?.address || 'N/A'}
+                                    </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Port</label>
+                                    <div className="p-3 bg-secondary/50 border border-border rounded-xl font-mono text-xs">
+                                        {service.node?.sftp_port || '2022'}
+                                    </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Username</label>
+                                    <div className="p-3 bg-secondary/50 border border-border rounded-xl font-mono text-xs flex justify-between items-center group">
+                                        <span>{service.uuid?.substring(0, 8)}.{user?.username}</span>
+                                        <button
+                                            onClick={() => navigator.clipboard.writeText(`${service.uuid?.substring(0, 8)}.${user?.username}`)}
+                                            className="text-[9px] font-bold text-primary opacity-0 group-hover:opacity-100 transition-opacity uppercase"
+                                        >
+                                            Copy
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Password</label>
+                                    <div className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl text-xs font-bold text-emerald-500 italic">
+                                        Your Atlas Account Password
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-6 bg-secondary/10 flex justify-end">
+                            <button
+                                onClick={() => setShowSFTPModal(false)}
+                                className="bg-primary text-white px-8 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 hover:brightness-110 transition-all w-full"
+                            >
+                                Got it
                             </button>
                         </div>
                     </div>

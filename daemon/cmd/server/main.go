@@ -2,24 +2,50 @@ package main
 
 import (
 	"log"
+	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/daemon/internal/api"
 	"github.com/luketaylor45/atlas/daemon/internal/config"
 	"github.com/luketaylor45/atlas/daemon/internal/docker"
+	"github.com/luketaylor45/atlas/daemon/internal/sftp"
 )
 
 func main() {
+	log.Println("[DEBUG] Loading configuration...")
 	config.LoadConfig()
+
+	log.Println("[DEBUG] Initializing Docker client...")
 	docker.Init()
 
 	log.Println("Starting Atlas Daemon...")
 	log.Printf("Connecting to Core at %s", config.NodeConfig.CoreURL)
 
+	// Start SFTP Server
+	log.Println("[DEBUG] Starting SFTP subsystem...")
+	sftp.SetAuthValidator(api.ValidateSFTPCredentials)
+	sftpServer := sftp.NewServer(config.NodeConfig.SFTPPort, "C:\\AtlasData")
+	if err := sftpServer.Start(); err != nil {
+		log.Printf("[WARN] SFTP Server failed to start: %v", err)
+	} else {
+		log.Printf("[SFTP] ✓ SFTP Server enabled on port %s", config.NodeConfig.SFTPPort)
+	}
+
 	// Start Heartbeat
 	go api.StartHeartbeat()
 
 	r := gin.Default()
+
+	// CORS Setup
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Node-Token"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
 
 	r.GET("/status", func(c *gin.Context) {
 		c.JSON(200, gin.H{

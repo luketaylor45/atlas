@@ -5,12 +5,14 @@ import {
     Play, Square, RefreshCcw, Skull,
     Terminal, Activity,
     ChevronRight, ArrowLeft, Settings, FolderClosed, Rocket,
-    Globe, AlertTriangle, Layers
+    Globe, AlertTriangle, Layers, Users, Clock, ArrowDown, ArrowUp
 } from 'lucide-react';
 import clsx from 'clsx';
 import FileManager from './FileManager';
+import ServiceUsersTab from './ServiceUsersTab';
+import ServiceActivityTab from './ServiceActivityTab';
 
-type Tab = 'console' | 'files' | 'startup' | 'settings';
+type Tab = 'console' | 'files' | 'startup' | 'settings' | 'users' | 'activity';
 
 interface LogLine {
     time: string;
@@ -26,10 +28,12 @@ export default function ServiceConsolePage() {
     const { uuid } = useParams();
     const navigate = useNavigate();
     const [service, setService] = useState<any>(null);
+    const [permissions, setPermissions] = useState<any>(null);
+    const [isOwner, setIsOwner] = useState(true);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
     const [logs, setLogs] = useState<LogLine[]>([]);
-    const [stats, setStats] = useState<any>({ cpu: 0, memory: 0 });
+    const [stats, setStats] = useState<any>({ cpu: 0, memory: 0, network: { rx: 0, tx: 0 } });
     const [activeTab, setActiveTab] = useState<Tab>('console');
     const [showReinstallConfirm, setShowReinstallConfirm] = useState(false);
     const [wsVersion, setWsVersion] = useState(0); // Used to force WS reconnect
@@ -39,7 +43,10 @@ export default function ServiceConsolePage() {
     const fetchDetails = async () => {
         try {
             const res = await api.get(`/services/${uuid}`);
-            setService(res.data);
+            // New structure: { service: {}, permissions: {}, is_owner: true/false }
+            setService(res.data.service);
+            setPermissions(res.data.permissions || null);
+            setIsOwner(res.data.is_owner);
         } catch (err) {
             console.error("Failed to fetch service details", err);
         } finally {
@@ -141,7 +148,8 @@ export default function ServiceConsolePage() {
                     const data = await res.json();
                     setStats({
                         cpu: data.cpu,
-                        memory: data.memory
+                        memory: data.memory,
+                        network: data.network || { rx: 0, tx: 0 }
                     });
                 }
             } catch (err) { }
@@ -384,32 +392,32 @@ export default function ServiceConsolePage() {
                 <div className="flex items-center gap-2 p-1.5 bg-secondary/50 rounded-2xl border border-border w-fit">
                     <button
                         onClick={() => handlePowerAction('start')}
-                        disabled={actionLoading || service.status === 'running' || service.status === 'starting' || service.status === 'installing'}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-white text-emerald-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
+                        disabled={actionLoading || service.status === 'running' || service.status === 'starting' || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-emerald-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <Play size={18} fill="currentColor" />
                         <span>Start</span>
                     </button>
                     <button
                         onClick={() => handlePowerAction('restart')}
-                        disabled={actionLoading || service.status === 'installing'}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-white text-blue-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
+                        disabled={actionLoading || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-blue-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <RefreshCcw size={18} />
                         <span>Restart</span>
                     </button>
                     <button
                         onClick={() => handlePowerAction('stop')}
-                        disabled={actionLoading || service.status === 'offline' || service.status === 'stopping' || service.status === 'installing'}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-white text-amber-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
+                        disabled={actionLoading || service.status === 'offline' || service.status === 'stopping' || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-amber-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <Square size={18} fill="currentColor" />
                         <span>Stop</span>
                     </button>
                     <button
                         onClick={() => handlePowerAction('kill')}
-                        disabled={actionLoading || service.status === 'installing'}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-white text-red-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
+                        disabled={actionLoading || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-red-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <Skull size={18} />
                         <span>Kill</span>
@@ -420,11 +428,13 @@ export default function ServiceConsolePage() {
             {/* Navigation */}
             <div className="flex items-center gap-1 border-b border-border mb-8 overflow-x-auto no-scrollbar">
                 {[
-                    { id: 'console', label: 'Console', icon: Terminal },
-                    { id: 'files', label: 'File Manager', icon: FolderClosed },
-                    { id: 'startup', label: 'Startup', icon: Rocket },
-                    { id: 'settings', label: 'Settings', icon: Settings },
-                ].map(tab => (
+                    { id: 'console', label: 'Console', icon: Terminal, show: isOwner || permissions?.can_view_console },
+                    { id: 'files', label: 'File Manager', icon: FolderClosed, show: isOwner || permissions?.can_manage_files },
+                    { id: 'startup', label: 'Startup', icon: Rocket, show: isOwner || permissions?.can_edit_startup },
+                    { id: 'users', label: 'Sub-Users', icon: Users, show: isOwner },
+                    { id: 'activity', label: 'Activity', icon: Clock, show: isOwner },
+                    { id: 'settings', label: 'Settings', icon: Settings, show: isOwner },
+                ].filter(tab => tab.show).map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id as Tab)}
@@ -488,8 +498,12 @@ export default function ServiceConsolePage() {
                                 <ChevronRight size={18} className="text-primary" />
                                 <input
                                     type="text"
-                                    placeholder="Type a command..."
-                                    className="bg-transparent border-none outline-none flex-1 text-sm font-mono text-zinc-200"
+                                    placeholder={isOwner || permissions?.can_send_commands ? "Type a command..." : "You do not have permission to send commands"}
+                                    disabled={!isOwner && !permissions?.can_send_commands}
+                                    className={clsx(
+                                        "bg-transparent border-none outline-none flex-1 text-sm font-mono text-zinc-200",
+                                        (!isOwner && !permissions?.can_send_commands) && "opacity-50 cursor-not-allowed"
+                                    )}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
                                             const input = (e.target as HTMLInputElement).value;
@@ -505,7 +519,7 @@ export default function ServiceConsolePage() {
                     )}
 
                     {activeTab === 'files' && (
-                        <FileManager />
+                        <FileManager service={service} />
                     )}
 
                     {activeTab === 'startup' && (
@@ -534,6 +548,14 @@ export default function ServiceConsolePage() {
                                 ))}
                             </div>
                         </div>
+                    )}
+
+                    {activeTab === 'users' && (
+                        <ServiceUsersTab />
+                    )}
+
+                    {activeTab === 'activity' && (
+                        <ServiceActivityTab />
                     )}
 
                     {activeTab === 'settings' && (
@@ -577,6 +599,21 @@ export default function ServiceConsolePage() {
                                 </div>
                                 <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
                                     <div className="h-full bg-primary transition-all duration-1000" style={{ width: `${Math.min((stats.memory / service.memory) * 100, 100)}%` }} />
+                                </div>
+                            </div>
+
+                            <div className="pt-4 border-t border-border/40 grid grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <div className="text-[9px] font-black text-muted uppercase tracking-widest flex items-center gap-1">
+                                        <ArrowDown size={10} className="text-emerald-500" /> Inbound
+                                    </div>
+                                    <div className="text-xs font-bold font-mono">{(stats?.network?.rx / 1024 / 1024).toFixed(2)} MB</div>
+                                </div>
+                                <div className="space-y-1 text-right">
+                                    <div className="text-[9px] font-black text-muted uppercase tracking-widest flex items-center gap-1 justify-end">
+                                        Outbound <ArrowUp size={10} className="text-blue-500" />
+                                    </div>
+                                    <div className="text-xs font-bold font-mono">{(stats?.network?.tx / 1024 / 1024).toFixed(2)} MB</div>
                                 </div>
                             </div>
                         </div>

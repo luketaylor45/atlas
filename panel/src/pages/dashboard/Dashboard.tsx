@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
+import clsx from 'clsx';
 import {
     Layers, ShieldCheck,
     ArrowRight, Zap, Bell, Clock,
-    CheckCircle
+    CheckCircle, AlertTriangle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -13,17 +14,20 @@ export default function UserDashboard() {
     const navigate = useNavigate();
     const [services, setServices] = useState<any[]>([]);
     const [overview, setOverview] = useState<any>({ total_services: 0, running_services: 0, health: 'OPTIMAL' });
+    const [news, setNews] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [sRes, oRes] = await Promise.all([
+                const [sRes, oRes, nRes] = await Promise.all([
                     api.get('/services'),
-                    api.get('/services/overview')
+                    api.get('/services/overview'),
+                    api.get('/news')
                 ]);
                 setServices(sRes.data);
                 setOverview(oRes.data);
+                setNews(nRes.data);
             } catch (err) {
                 console.error("Failed to fetch dashboard data", err);
             } finally {
@@ -38,12 +42,17 @@ export default function UserDashboard() {
             {/* Welcome Header */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
-                    <h1 className="text-4xl font-bold tracking-tight mb-2">Welcome back, {user?.username || user?.email.split('@')[0]}</h1>
+                    <h1 className="text-4xl font-bold tracking-tight mb-2">Welcome back, {user?.username}</h1>
                     <p className="text-muted text-lg">Here's an overview of your services and system status.</p>
                 </div>
-                <div className="bg-emerald-500/10 border border-emerald-500/20 px-5 py-2.5 rounded-2xl flex items-center gap-3">
-                    <CheckCircle className="text-emerald-500" size={20} />
-                    <span className="text-sm font-bold text-emerald-500 uppercase tracking-wider">System Optimal</span>
+                <div className={clsx(
+                    "px-5 py-2.5 rounded-2xl flex items-center gap-3 border",
+                    overview.health === 'OPTIMAL' ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" : "bg-amber-500/10 border-amber-500/20 text-amber-500"
+                )}>
+                    {overview.health === 'OPTIMAL' ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}
+                    <span className="text-sm font-bold uppercase tracking-wider">
+                        {overview.health === 'OPTIMAL' ? 'System Optimal' : 'System Degraded'}
+                    </span>
                 </div>
             </div>
 
@@ -79,8 +88,13 @@ export default function UserDashboard() {
                             <ShieldCheck size={24} />
                         </div>
                         <div>
-                            <p className="text-xs font-bold text-muted uppercase tracking-widest mb-1">Node Status</p>
-                            <h3 className="text-3xl font-bold tracking-tight">Stable</h3>
+                            <p className="text-xs font-bold text-muted uppercase tracking-widest mb-1">Infrastructure</p>
+                            <h3 className={clsx(
+                                "text-3xl font-bold tracking-tight",
+                                overview.health === 'OPTIMAL' ? "text-foreground" : "text-amber-500"
+                            )}>
+                                {overview.health === 'OPTIMAL' ? 'Stable' : 'Degraded'}
+                            </h3>
                         </div>
                     </div>
                 </div>
@@ -148,17 +162,27 @@ export default function UserDashboard() {
                         Latest News
                     </h2>
                     <div className="panel-card p-6 space-y-6 border-border/60 bg-secondary/10">
-                        <div className="space-y-3">
-                            <span className="text-[9px] font-bold text-primary uppercase tracking-widest bg-primary/10 px-2 py-0.5 rounded border border-primary/20">Release</span>
-                            <h4 className="text-sm font-bold leading-tight">Atlas Node v2.1 Performance Update</h4>
-                            <p className="text-xs text-muted leading-relaxed font-medium">Infrastructure upgrades are complete for all major regions, improving deployment speed by 40%.</p>
-                        </div>
-                        <div className="h-px bg-border/40" />
-                        <div className="space-y-3">
-                            <span className="text-[9px] font-bold text-blue-500 uppercase tracking-widest bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Status</span>
-                            <h4 className="text-sm font-bold leading-tight">Scheduled Optimization</h4>
-                            <p className="text-xs text-muted leading-relaxed font-medium">We will be performing a global database optimization on Feb 1st. No downtime is expected.</p>
-                        </div>
+                        {news.length === 0 ? (
+                            <p className="text-xs text-muted text-center py-4 font-bold border-dashed border border-border/40 rounded-xl">No Recent Announcements</p>
+                        ) : (
+                            news.slice(0, 3).map((item, idx) => (
+                                <div key={item.id}>
+                                    <div className="space-y-4">
+                                        <span className={clsx(
+                                            "text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border",
+                                            item.type === 'Release' ? "bg-primary/10 text-primary border-primary/20" :
+                                                item.type === 'Status' ? "bg-blue-500/10 text-blue-500 border-blue-500/20" :
+                                                    "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                                        )}>
+                                            {item.type}
+                                        </span>
+                                        <h4 className="text-sm font-bold leading-tight mt-1">{item.title}</h4>
+                                        <p className="text-xs text-muted leading-relaxed font-medium line-clamp-3">{item.content}</p>
+                                    </div>
+                                    {idx !== Math.min(news.length, 3) - 1 && <div className="h-px bg-border/40 mt-6" />}
+                                </div>
+                            ))
+                        )}
                     </div>
                 </div>
             </div>

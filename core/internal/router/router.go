@@ -25,6 +25,7 @@ func Setup(r *gin.Engine) {
 		auth := api.Group("/auth")
 		{
 			auth.POST("/login", handlers.Login)
+			auth.POST("/register", handlers.Register)
 			auth.POST("/setup", handlers.InitialSetup)
 			auth.GET("/setup-status", handlers.GetSetupStatus)
 		}
@@ -33,6 +34,7 @@ func Setup(r *gin.Engine) {
 		{
 			internal.POST("/heartbeat", handlers.HandleHeartbeat)
 			internal.POST("/services/:uuid/status", handlers.HandleServerStatusUpdate)
+			internal.POST("/sftp/validate", handlers.ValidateSFTPCredentials)
 		}
 
 		// Admin Routes (Protected)
@@ -46,6 +48,7 @@ func Setup(r *gin.Engine) {
 			admin.DELETE("/nodes/:id", handlers.DeleteNode)
 			admin.GET("/users", handlers.GetUsers)
 			admin.POST("/users", handlers.CreateUser)
+			admin.PUT("/users/:id", handlers.UpdateUser)
 			admin.DELETE("/users/:id", handlers.DeleteUser)
 
 			admin.GET("/eggs", handlers.GetEggs)
@@ -60,6 +63,11 @@ func Setup(r *gin.Engine) {
 			admin.POST("/services", handlers.CreateService)
 			admin.PUT("/services/:id", handlers.UpdateService)
 			admin.DELETE("/services/:id", handlers.DeleteService)
+
+			// News Management (Admin)
+			admin.POST("/news", handlers.CreateNews)
+			admin.PUT("/news/:id", handlers.UpdateNews)
+			admin.DELETE("/news/:id", handlers.DeleteNews)
 		}
 
 		// User Service Routes
@@ -81,6 +89,18 @@ func Setup(r *gin.Engine) {
 			services.POST("/:uuid/files/create-folder", handlers.ServiceCreateFolder)
 			services.POST("/:uuid/files/upload", handlers.ServiceUploadFile)
 			services.DELETE("/:uuid/files", handlers.ServiceDeleteFile)
+
+			// Sub-user Management (unify with :uuid to avoid Gin conflict)
+			services.GET("/:uuid/users", handlers.GetServiceUsers)
+			services.POST("/:uuid/users", handlers.AddServiceUser)
+			services.PUT("/:uuid/users/:userId", handlers.UpdateServiceUser)
+			services.DELETE("/:uuid/users/:userId", handlers.RemoveServiceUser)
+
+			// Activity Logs
+			services.GET("/:uuid/logs", handlers.GetServiceActivityLogs)
 		}
+
+		// Global Routes
+		api.GET("/news", handlers.GetNews)
 	}
 }

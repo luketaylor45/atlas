@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { Server, HardDrive, Plus, Globe, CheckCircle, XCircle, Trash2, Settings, X, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
+import { formatDistanceToNow } from 'date-fns';
 
 interface Node {
     id: number;
@@ -13,6 +14,7 @@ interface Node {
     location?: string;
     total_ram?: number;
     total_disk?: number;
+    last_heartbeat?: string;
 }
 
 export default function NodesPage() {
@@ -119,7 +121,10 @@ export default function NodesPage() {
 
                         <div className="mt-8 pt-4 border-t border-border/30 flex items-center justify-between">
                             <div className="text-[10px] font-bold text-muted uppercase tracking-widest flex items-center gap-2">
-                                Last Heartbeat <span className="text-foreground">Just now</span>
+                                Last Heartbeat
+                                <span className="text-foreground">
+                                    {node.last_heartbeat ? formatDistanceToNow(new Date(node.last_heartbeat), { addSuffix: true }) : 'Never'}
+                                </span>
                             </div>
                             <div className="flex items-center gap-2">
                                 <button

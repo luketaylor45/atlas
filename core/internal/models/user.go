@@ -8,8 +8,7 @@ import (
 
 type User struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
-	Username  string         `gorm:"size:255" json:"username"`
-	Email     string         `gorm:"uniqueIndex;not null" json:"email"`
+	Username  string         `gorm:"uniqueIndex;not null" json:"username"`
 	Password  string         `gorm:"not null" json:"-"` // Hide password in JSON
 	IsAdmin   bool           `gorm:"default:false" json:"is_admin"`
 	CreatedAt time.Time      `json:"created_at"`

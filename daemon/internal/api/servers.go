@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/luketaylor45/atlas/daemon/internal/config"
 	"github.com/luketaylor45/atlas/daemon/internal/docker"
+	"github.com/luketaylor45/atlas/daemon/internal/installer"
 )
 
 var upgrader = websocket.Upgrader{
@@ -79,12 +80,6 @@ func CreateServer(c *gin.Context) {
 
 	// 3. Configure Container
 
-	// 3. Configure Container
-
-	// Ports
-	// Garry's Mod uses UDP for game, TCP for RCON.
-	// Let's blindly map the port on both for now.
-
 	cPortUDP := nat.Port(fmt.Sprintf("%d/udp", req.Port))
 	cPortTCP := nat.Port(fmt.Sprintf("%d/tcp", req.Port))
 
@@ -113,61 +108,42 @@ func CreateServer(c *gin.Context) {
 
 	// 3. Handle Installation Phase
 	if req.InstallScript != "" {
-		writeInstallScript(req.UUID, req.InstallScript, req.Environment)
+		// Set Status to Installing
+		NotifyStatus(req.UUID, "installing")
 
-		installImage := req.InstallContainer
-		if installImage == "" {
-			installImage = "ubuntu:20.04" // Default install image
-		}
+		go func() {
+			log.Printf("[Daemon] Starting background installation for %s", req.UUID)
+			inst := installer.New(docker.Client)
 
-		log.Printf("[Daemon] Running installation container: %s", installImage)
-
-		// Pull install image
-		pullReader, err := docker.Client.ImagePull(ctx, installImage, image.PullOptions{})
-		if err == nil {
-			io.Copy(os.Stdout, pullReader)
-			pullReader.Close()
-		}
-
-		// Create install container
-		installHostConfig := &container.HostConfig{
-			Mounts: []mount.Mount{
-				{
-					Type:   mount.TypeBind,
-					Source: fmt.Sprintf("C:\\AtlasData\\%s", req.UUID),
-					Target: "/mnt/server", // Map to /mnt/server as expected by pterodactyl scripts
-				},
-			},
-		}
-
-		installContainerConfig := &container.Config{
-			Image:      installImage,
-			User:       "0", // Run as root
-			Cmd:        []string{"bash", "/mnt/server/install.sh"},
-			WorkingDir: "/mnt/server",
-		}
-
-		installResp, err := docker.Client.ContainerCreate(ctx, installContainerConfig, installHostConfig, nil, nil, fmt.Sprintf("%s-install", req.UUID))
-		if err == nil {
-			docker.Client.ContainerStart(ctx, installResp.ID, container.StartOptions{})
-
-			// Wait for install to finish
-			statusCh, errCh := docker.Client.ContainerWait(ctx, installResp.ID, container.WaitConditionNotRunning)
-			select {
-			case <-statusCh:
-				log.Printf("[Daemon] Installation finished for %s", req.UUID)
-			case err := <-errCh:
-				log.Printf("[Daemon] Installation wait error: %v", err)
+			installImage := req.InstallContainer
+			if installImage == "" {
+				installImage = "ghcr.io/pterodactyl/installers:alpine" // Better default
 			}
 
-			// Clean up install container
-			docker.Client.ContainerRemove(ctx, installResp.ID, container.RemoveOptions{Force: true})
+			// Parse env variables
+			var envVars []string
+			if req.Environment != "" {
+				var envMap map[string]string
+				if err := json.Unmarshal([]byte(req.Environment), &envMap); err == nil {
+					for k, v := range envMap {
+						envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+					}
+				}
+			}
 
-			// Mark as installed so start.sh doesn't try to run it (and fail due to permissions)
+			err := inst.Install(context.Background(), req.UUID, installImage, req.InstallScript, envVars)
+			if err != nil {
+				log.Printf("[Daemon] Installation FAILED for %s: %v", req.UUID, err)
+				NotifyStatus(req.UUID, "installation_failed")
+				os.WriteFile(filepath.Join(dataDir, ".atlas_install_failed"), []byte(err.Error()), 0644)
+				return
+			}
+
+			log.Printf("[Daemon] Installation SUCCEEDED for %s", req.UUID)
 			os.WriteFile(filepath.Join(dataDir, ".atlas_installed"), []byte(time.Now().Format(time.RFC3339)), 0644)
-		} else {
-			log.Printf("[Daemon] Failed to create install container: %v", err)
-		}
+
+			NotifyStatus(req.UUID, "offline")
+		}()
 	}
 
 	// 4. Write Start Script
@@ -219,9 +195,14 @@ func CreateServer(c *gin.Context) {
 	// 5. Notify Core that we are ready
 	NotifyStatus(req.UUID, "installing")
 
-	// 6. START THE CONTAINER AUTOMATICALLY
-	if err := docker.Client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		log.Printf("Failed to start container: %v", err)
+	// 6. START THE CONTAINER AUTOMATICALLY (Only if NOT installing)
+	if req.InstallScript == "" {
+		log.Printf("[Daemon] Starting container %s...", resp.ID)
+		if err := docker.Client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			log.Printf("Failed to start container: %v", err)
+		}
+	} else {
+		log.Printf("[Daemon] Container %s created but waiting for installation to finish.", resp.ID)
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"container_id": resp.ID})
@@ -275,9 +256,22 @@ func UpdateServer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
+type ReinstallRequest struct {
+	InstallScript    string `json:"install_script"`
+	InstallContainer string `json:"install_container"`
+	Environment      string `json:"environment"`
+}
+
 // HandleReinstall wipes game files to trigger a fresh install
 func HandleReinstall(c *gin.Context) {
 	uuid := c.Param("uuid")
+
+	var req ReinstallRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload: " + err.Error()})
+		return
+	}
+
 	ctx := context.Background()
 
 	// 1. Stop container
@@ -295,6 +289,41 @@ func HandleReinstall(c *gin.Context) {
 
 	// 3. Notify Core
 	NotifyStatus(uuid, "installing")
+
+	// 4. Run Installer
+	go func() {
+		log.Printf("[Daemon] Starting background RE-installation for %s", uuid)
+		inst := installer.New(docker.Client)
+
+		installImage := req.InstallContainer
+		if installImage == "" {
+			installImage = "ghcr.io/pterodactyl/installers:alpine"
+		}
+
+		// Parse env variables
+		var envVars []string
+		if req.Environment != "" {
+			var envMap map[string]string
+			if err := json.Unmarshal([]byte(req.Environment), &envMap); err == nil {
+				for k, v := range envMap {
+					envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+				}
+			}
+		}
+
+		err := inst.Install(context.Background(), uuid, installImage, req.InstallScript, envVars)
+		if err != nil {
+			log.Printf("[Daemon] Re-installation FAILED for %s: %v", uuid, err)
+			NotifyStatus(uuid, "installation_failed")
+			os.WriteFile(filepath.Join(dataDir, ".atlas_install_failed"), []byte(err.Error()), 0644)
+			return
+		}
+
+		log.Printf("[Daemon] Re-installation SUCCEEDED for %s", uuid)
+		os.WriteFile(filepath.Join(dataDir, ".atlas_installed"), []byte(time.Now().Format(time.RFC3339)), 0644)
+
+		NotifyStatus(uuid, "offline")
+	}()
 
 	c.JSON(http.StatusOK, gin.H{"status": "reinstall_triggered"})
 }
@@ -492,12 +521,22 @@ func HandleConsole(c *gin.Context) {
 
 func HandleStats(c *gin.Context) {
 	uuid := c.Param("uuid")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Increased timeout to 10s to account for slow Docker pipes on Windows
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// 1. Get stats once. Docker's API returns current and previous samples (precpu_stats).
 	s, err := docker.Client.ContainerStats(ctx, uuid, false)
 	if err != nil {
+		if err == context.DeadlineExceeded {
+			log.Printf("[Daemon] Stats timeout for %s - returning zeroed metrics", uuid)
+			c.JSON(http.StatusOK, gin.H{
+				"cpu":     "0.0",
+				"memory":  0,
+				"network": gin.H{"rx": 0, "tx": 0},
+			})
+			return
+		}
 		log.Printf("[Daemon] Error fetching stats for %s: %v", uuid, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -525,6 +564,10 @@ func HandleStats(c *gin.Context) {
 				Cache uint64 `json:"cache"`
 			} `json:"stats"`
 		} `json:"memory_stats"`
+		Networks map[string]struct {
+			RxBytes uint64 `json:"rx_bytes"`
+			TxBytes uint64 `json:"tx_bytes"`
+		} `json:"networks"`
 	}
 
 	if err := json.NewDecoder(s.Body).Decode(&stats); err != nil {
@@ -551,9 +594,17 @@ func HandleStats(c *gin.Context) {
 	realMemory := stats.MemoryStats.Usage - stats.MemoryStats.Stats.Cache
 	memoryMB := realMemory / 1024 / 1024
 
+	// Calculate Network
+	var rx, tx uint64
+	for _, n := range stats.Networks {
+		rx += n.RxBytes
+		tx += n.TxBytes
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"cpu":    fmt.Sprintf("%.1f", cpuPercent),
-		"memory": memoryMB,
+		"cpu":     fmt.Sprintf("%.1f", cpuPercent),
+		"memory":  memoryMB,
+		"network": gin.H{"rx": rx, "tx": tx},
 	})
 }
 

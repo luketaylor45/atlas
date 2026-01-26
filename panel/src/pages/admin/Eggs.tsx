@@ -11,6 +11,8 @@ export default function AdminEggsPage() {
     const [searchTerm, setSearchTerm] = useState('');
     const [editingEgg, setEditingEgg] = useState<any>(null);
     const [editingNest, setEditingNest] = useState<any>(null);
+    const [showCreateNestModal, setShowCreateNestModal] = useState(false);
+    const [newNest, setNewNest] = useState({ name: '', description: '', parent_id: null as number | null });
 
     const fetchData = async () => {
         try {
@@ -71,6 +73,17 @@ export default function AdminEggsPage() {
         }
     };
 
+    const createNest = async () => {
+        try {
+            await api.post('/admin/nests', newNest);
+            setShowCreateNestModal(false);
+            setNewNest({ name: '', description: '', parent_id: null });
+            fetchData();
+        } catch (err) {
+            alert("Failed to create nest.");
+        }
+    };
+
     if (loading) return <div className="p-12 text-center animate-pulse text-muted font-bold tracking-widest mt-20 uppercase">Loading Templates...</div>;
 
     return (
@@ -83,10 +96,17 @@ export default function AdminEggsPage() {
                     <p className="text-muted font-medium text-sm mt-1">Manage your service templates and categories configuration.</p>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setShowCreateNestModal(true)}
+                        className="flex items-center gap-2 bg-secondary text-foreground px-5 py-2.5 rounded-xl font-bold text-sm hover:bg-secondary/80 transition-all border border-border/50"
+                    >
+                        <FolderPlus size={18} />
+                        New Category
+                    </button>
                     <button
                         onClick={() => navigate('/admin/eggs/import')}
-                        className="flex items-center gap-2 bg-secondary text-foreground px-5 py-2.5 rounded-xl font-bold text-sm hover:bg-secondary/80 transition-all border border-border/50"
+                        className="flex items-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm hover:brightness-110 transition-all shadow-lg shadow-primary/20"
                     >
                         <Plus size={18} />
                         Import Egg
@@ -103,28 +123,49 @@ export default function AdminEggsPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {nests.map(nest => (
-                        <div key={nest.id} className="panel-card p-6 flex flex-col justify-between group">
-                            <div>
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                                        <Package size={20} />
+                    {nests.filter(n => !n.parent_id).map(nest => (
+                        <div key={nest.id} className="space-y-4">
+                            <div className="panel-card p-6 flex flex-col justify-between group bg-primary/5 border-primary/20">
+                                <div>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                                            <Package size={20} />
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <button onClick={() => setEditingNest(nest)} className="p-2 hover:bg-secondary rounded-lg text-muted transition-colors">
+                                                <Edit size={14} />
+                                            </button>
+                                            <button onClick={() => deleteNest(nest.id)} className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors">
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-1">
-                                        <button onClick={() => setEditingNest(nest)} className="p-2 hover:bg-secondary rounded-lg text-muted transition-colors">
-                                            <Edit size={14} />
-                                        </button>
-                                        <button onClick={() => deleteNest(nest.id)} className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors">
-                                            <Trash2 size={14} />
-                                        </button>
-                                    </div>
+                                    <h3 className="font-bold text-lg group-hover:text-primary transition-colors uppercase tracking-tight">{nest.name}</h3>
+                                    <p className="text-xs text-muted font-medium mt-1 line-clamp-2">{nest.description || 'Global category container.'}</p>
                                 </div>
-                                <h3 className="font-bold text-lg group-hover:text-primary transition-colors">{nest.name}</h3>
-                                <p className="text-xs text-muted font-medium mt-1 line-clamp-2">{nest.description || 'No description provided.'}</p>
                             </div>
-                            <div className="mt-6 pt-4 border-t border-border/30 flex items-center justify-between">
-                                <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Contained Eggs</span>
-                                <span className="text-xs font-bold bg-secondary px-2 py-0.5 rounded-md text-foreground">{nest.eggs?.length || 0}</span>
+                            <div className="pl-6 space-y-3 border-l-2 border-border/50 ml-4">
+                                {nests.filter(sub => sub.parent_id === nest.id).map(sub => (
+                                    <div key={sub.id} className="panel-card p-4 flex items-center justify-between group hover:border-primary/40 transition-all">
+                                        <div>
+                                            <div className="font-bold text-sm">{sub.name}</div>
+                                            <div className="text-[10px] text-muted font-bold uppercase tracking-widest">{sub.eggs?.length || 0} Eggs</div>
+                                        </div>
+                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                            <button onClick={() => setEditingNest(sub)} className="p-1.5 hover:bg-secondary rounded-lg text-muted transition-colors">
+                                                <Edit size={12} />
+                                            </button>
+                                            <button onClick={() => deleteNest(sub.id)} className="p-1.5 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors">
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                                {nests.filter(sub => sub.parent_id === nest.id).length === 0 && (
+                                    <div className="py-3 px-4 border border-dashed border-border/60 rounded-2xl text-[10px] font-bold text-muted uppercase tracking-widest text-center">
+                                        No sub-categories
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))}
@@ -213,6 +254,19 @@ export default function AdminEggsPage() {
                                 <input className="input-field" value={editingNest.name} onChange={e => setEditingNest({ ...editingNest, name: e.target.value })} />
                             </div>
                             <div className="space-y-1.5">
+                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Parent Category</label>
+                                <select
+                                    className="input-field"
+                                    value={editingNest.parent_id || ''}
+                                    onChange={e => setEditingNest({ ...editingNest, parent_id: e.target.value === '' ? null : parseInt(e.target.value) })}
+                                >
+                                    <option value="">None (Top Level)</option>
+                                    {nests.filter(n => !n.parent_id && n.id !== editingNest.id).map(n => (
+                                        <option key={n.id} value={n.id}>{n.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Description</label>
                                 <textarea className="input-field min-h-[100px]" value={editingNest.description} onChange={e => setEditingNest({ ...editingNest, description: e.target.value })} />
                             </div>
@@ -232,13 +286,13 @@ export default function AdminEggsPage() {
                             <h3 className="font-bold text-xl">Modify Egg Template</h3>
                             <button onClick={() => setEditingEgg(null)} className="p-2 hover:bg-secondary rounded-xl"><X size={24} /></button>
                         </div>
-                        <div className="p-8 space-y-8">
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-4">
+                                <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Service Name</label>
                                     <input className="input-field" value={editingEgg.name} onChange={e => setEditingEgg({ ...editingEgg, name: e.target.value })} />
                                 </div>
-                                <div className="space-y-2">
+                                <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Category (Nest)</label>
                                     <select
                                         className="input-field"
@@ -250,43 +304,120 @@ export default function AdminEggsPage() {
                                         ))}
                                     </select>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Docker Image(s)</label>
-                                    <input className="input-field font-mono text-xs" value={editingEgg.docker_images} onChange={e => setEditingEgg({ ...editingEgg, docker_images: e.target.value })} placeholder='["image1", "image2"]' />
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Startup Command</label>
+                                    <textarea className="input-field font-mono text-xs min-h-[80px]" value={editingEgg.startup_command} onChange={e => setEditingEgg({ ...editingEgg, startup_command: e.target.value })} />
                                 </div>
                             </div>
 
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Startup Command</label>
-                                <textarea className="input-field font-mono text-xs min-h-[100px]" value={editingEgg.startup_command} onChange={e => setEditingEgg({ ...editingEgg, startup_command: e.target.value })} />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
+                            <div className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Description</label>
+                                    <textarea className="input-field min-h-[50px] text-xs" value={editingEgg.description} onChange={e => setEditingEgg({ ...editingEgg, description: e.target.value })} />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Docker Image(s) JSON</label>
+                                    <input className="input-field font-mono text-xs" value={editingEgg.docker_images} onChange={e => setEditingEgg({ ...editingEgg, docker_images: e.target.value })} placeholder='["image1"]' />
+                                </div>
+                                <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Stop Command</label>
                                     <input className="input-field" value={editingEgg.stop_command} onChange={e => setEditingEgg({ ...editingEgg, stop_command: e.target.value })} placeholder="e.g. quit" />
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Install Image</label>
-                                    <input className="input-field" value={editingEgg.install_container} onChange={e => setEditingEgg({ ...editingEgg, install_container: e.target.value })} />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 py-2">
+                            <div className="h-px bg-border flex-1" />
+                            <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Installation & Lifecycle</span>
+                            <div className="h-px bg-border flex-1" />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Install Container Image</label>
+                                    <input className="input-field font-mono text-xs" value={editingEgg.install_container} onChange={e => setEditingEgg({ ...editingEgg, install_container: e.target.value })} />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Script Entry Point</label>
+                                    <input className="input-field font-mono text-xs" value={editingEgg.script_entry} onChange={e => setEditingEgg({ ...editingEgg, script_entry: e.target.value })} placeholder="e.g. bash" />
                                 </div>
                             </div>
-
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Installation Script</label>
-                                <textarea className="input-field font-mono text-xs min-h-[150px]" value={editingEgg.install_script} onChange={e => setEditingEgg({ ...editingEgg, install_script: e.target.value })} />
-                            </div>
-
-                            <div className="p-4 rounded-xl bg-orange-500/5 border border-orange-500/20 flex gap-3 text-orange-500">
-                                <Info size={18} className="shrink-0" />
-                                <div className="text-[10px] font-medium leading-relaxed">
-                                    Templates define how your services start, stop, and install. Be extremely careful when modifying scripts as it may break existing and future deployments.
+                            <div className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Installation Script</label>
+                                    <textarea className="input-field font-mono text-xs min-h-[120px]" value={editingEgg.install_script} onChange={e => setEditingEgg({ ...editingEgg, install_script: e.target.value })} />
                                 </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Raw Config JSON</label>
+                            <textarea className="input-field font-mono text-xs min-h-[100px]" value={editingEgg.config} onChange={e => setEditingEgg({ ...editingEgg, config: e.target.value })} placeholder="{}" />
+                        </div>
+
+                        <div className="p-4 rounded-xl bg-orange-500/5 border border-orange-500/20 flex gap-3 text-orange-500">
+                            <Info size={18} className="shrink-0" />
+                            <div className="text-[10px] font-medium leading-relaxed">
+                                Templates define how your services start, stop, and install. Be extremely careful when modifying scripts as it may break existing and future deployments.
                             </div>
                         </div>
                         <div className="p-8 bg-secondary/10 flex justify-end gap-3 sticky bottom-0 z-10 border-t border-border/50">
                             <button onClick={() => setEditingEgg(null)} className="px-6 py-2 rounded-xl font-bold text-sm text-muted">Cancel</button>
                             <button onClick={saveEgg} className="px-8 py-2 bg-primary text-white rounded-xl font-bold text-sm shadow-lg shadow-primary/20">Update Template</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Create Nest Modal */}
+            {showCreateNestModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+                    <div className="bg-background border border-border/60 rounded-3xl w-full max-w-lg shadow-2xl scale-in">
+                        <div className="p-6 border-b border-border/50 flex items-center justify-between">
+                            <h3 className="font-bold text-lg">Create New Category</h3>
+                            <button onClick={() => setShowCreateNestModal(false)} className="p-2 hover:bg-secondary rounded-xl"><X size={20} /></button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <div className="space-y-1.5">
+                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Nest Name</label>
+                                <input
+                                    className="input-field"
+                                    placeholder="e.g. Garry's Mod"
+                                    value={newNest.name}
+                                    onChange={e => setNewNest({ ...newNest, name: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Parent Category</label>
+                                <select
+                                    className="input-field"
+                                    value={newNest.parent_id || ''}
+                                    onChange={e => setNewNest({ ...newNest, parent_id: e.target.value === '' ? null : parseInt(e.target.value) })}
+                                >
+                                    <option value="">None (Top Level)</option>
+                                    {nests.filter(n => !n.parent_id).map(n => (
+                                        <option key={n.id} value={n.id}>{n.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Description</label>
+                                <textarea
+                                    className="input-field min-h-[100px]"
+                                    placeholder="Describe the types of eggs this category will contain..."
+                                    value={newNest.description}
+                                    onChange={e => setNewNest({ ...newNest, description: e.target.value })}
+                                />
+                            </div>
+                        </div>
+                        <div className="p-6 bg-secondary/10 flex justify-end gap-3">
+                            <button
+                                onClick={createNest}
+                                disabled={!newNest.name}
+                                className="px-8 py-2 bg-primary text-white rounded-xl font-bold text-sm shadow-lg shadow-primary/20 disabled:opacity-50"
+                            >
+                                Create Category
+                            </button>
                         </div>
                     </div>
                 </div>

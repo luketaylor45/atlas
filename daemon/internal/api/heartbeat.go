@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/events"
@@ -50,6 +51,11 @@ func MonitorEvents() {
 			uuid := msg.Actor.Attributes["name"]
 			if uuid == "" {
 				uuid = msg.Actor.ID
+			}
+
+			// Ignore installation containers in the main monitor
+			if strings.HasPrefix(uuid, "install-") {
+				continue
 			}
 
 			status := ""

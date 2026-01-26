@@ -11,12 +11,12 @@ import (
 )
 
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
+	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email" binding:"required,email"`
+	Username string `json:"username" binding:"required,min=3"`
 	Password string `json:"password" binding:"required,min=8"`
 }
 
@@ -28,11 +28,11 @@ func Login(c *gin.Context) {
 	}
 
 	var user models.User
-	if err := database.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+	if err := database.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
-
+	// ... [rest of Login function is same]
 	// Check password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
@@ -49,6 +49,52 @@ func Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user":  user,
+	})
+}
+
+// Register creates a new regular user account
+func Register(c *gin.Context) {
+	var req RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Check if username is taken
+	var existing models.User
+	if err := database.DB.Where("username = ?", req.Username).First(&existing).Error; err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Username is already taken"})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+		return
+	}
+
+	user := models.User{
+		Username: req.Username,
+		Password: string(hashedPassword),
+		IsAdmin:  false, // Regular users are not admins by default
+	}
+
+	if err := database.DB.Create(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		return
+	}
+
+	// Generate token for immediate login
+	token, err := utils.GenerateToken(user.ID, user.IsAdmin)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "User created but login failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "User registered successfully",
+		"token":   token,
+		"user":    user,
 	})
 }
 
@@ -75,7 +121,7 @@ func InitialSetup(c *gin.Context) {
 	}
 
 	user := models.User{
-		Email:    req.Email,
+		Username: req.Username,
 		Password: string(hashedPassword),
 		IsAdmin:  true,
 	}
@@ -85,7 +131,10 @@ func InitialSetup(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"message": "Admin user created", "user": user})
+	// Seed default eggs as part of the setup procedure
+	database.SeedDefaults()
+
+	c.JSON(http.StatusCreated, gin.H{"message": "Admin user created and defaults seeded", "user": user})
 }
 
 // GetSetupStatus checks if the system needs setup

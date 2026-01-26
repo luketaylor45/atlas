@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import LoginPage from './pages/auth/Login';
+import RegisterPage from './pages/auth/Register';
 import SetupPage from './pages/setup/Setup';
 import Dashboard from './pages/dashboard/Dashboard';
 import MyServices from './pages/dashboard/MyServices';
@@ -13,6 +14,8 @@ import AdminServicesPage from './pages/admin/Services';
 import CreateServicePage from './pages/admin/CreateService';
 import AdminOverviewPage from './pages/admin/Overview';
 import AdminUsersPage from './pages/admin/Users';
+import AdminNewsPage from './pages/admin/News';
+import SettingsPage from './pages/dashboard/Settings';
 import ImportEggPage from './pages/admin/ImportEgg';
 import AdminEggsPage from './pages/admin/Eggs';
 import { AuthProvider } from './context/AuthContext';
@@ -25,6 +28,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/setup" element={<SetupPage />} />
 
           <Route path="/" element={
@@ -36,7 +40,7 @@ function App() {
             <Route path="services" element={<MyServices />} />
             <Route path="services/:uuid" element={<ServiceConsolePage />} />
             <Route path="services/:uuid/files" element={<FileManager />} />
-            <Route path="settings" element={<div className="p-4 bg-secondary/30 rounded-xl border border-border">Settings Page (Coming Soon)</div>} />
+            <Route path="settings" element={<SettingsPage />} />
 
             {/* Admin Routes */}
             <Route path="admin" element={<AdminLayout />}>
@@ -48,6 +52,7 @@ function App() {
               <Route path="eggs" element={<AdminEggsPage />} />
               <Route path="eggs/import" element={<ImportEggPage />} />
               <Route path="users" element={<AdminUsersPage />} />
+              <Route path="news" element={<AdminNewsPage />} />
             </Route>
           </Route>
 

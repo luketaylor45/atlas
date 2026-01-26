@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/docker/docker/client"
 )
@@ -16,8 +17,11 @@ func Init() {
 		log.Fatalf("Failed to create Docker client: %v", err)
 	}
 
-	// Ping to verify connection
-	_, err = Client.Ping(context.Background())
+	// Ping to verify connection (with timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = Client.Ping(ctx)
 	if err != nil {
 		log.Printf("[WARNING] Docker Daemon not reachable: %v", err)
 	} else {

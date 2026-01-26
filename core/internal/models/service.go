@@ -6,57 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Nest defines a category for eggs (e.g., "Source Engine", "Minecraft")
-type Nest struct {
-	ID          uint   `gorm:"primaryKey" json:"id"`
-	UUID        string `gorm:"uniqueIndex;size:36;not null" json:"uuid"`
-	Name        string `gorm:"size:255;not null" json:"name"`
-	Description string `gorm:"type:text" json:"description"`
-	Eggs        []Egg  `json:"eggs" gorm:"foreignKey:NestID"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// Egg defines a game configuration (e.g., "Garry's Mod", "Minecraft")
-type Egg struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	UUID           string `gorm:"uniqueIndex;size:36;not null" json:"uuid"`
-	NestID         uint   `gorm:"not null" json:"nest_id"`
-	Nest           Nest   `json:"nest" gorm:"foreignKey:NestID"`
-	Name           string `gorm:"size:255;not null" json:"name"`
-	Description    string `gorm:"type:text" json:"description"`
-	DockerImages   string `gorm:"type:text" json:"docker_images"` // JSON string: ["image1", "image2"]
-	StartupCommand string `gorm:"type:text;not null" json:"startup_command"`
-	StopCommand    string `gorm:"size:255" json:"stop_command"`
-	ConfigFiles    string `gorm:"type:text" json:"config_files"` // JSON string: [{"path": "...", "search": "...", "replace": "..."}]
-
-	InstallScript     string `gorm:"type:text" json:"install_script"`
-	InstallContainer  string `gorm:"size:255" json:"install_container"`
-	InstallEntrypoint string `gorm:"size:255" json:"install_entrypoint"`
-
-	Variables []EggVariable `json:"variables" gorm:"foreignKey:EggID"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// EggVariable defines a configurable variable for an egg
-type EggVariable struct {
-	ID                  uint   `gorm:"primaryKey" json:"id"`
-	EggID               uint   `gorm:"not null" json:"egg_id"`
-	Name                string `gorm:"size:255;not null" json:"name"`
-	Description         string `gorm:"type:text" json:"description"`
-	EnvironmentVariable string `gorm:"size:255;not null" json:"environment_variable"`
-	DefaultValue        string `gorm:"type:text" json:"default_value"`
-	UserViewable        bool   `gorm:"default:true" json:"user_viewable"`
-	UserEditable        bool   `gorm:"default:true" json:"user_editable"`
-	Rules               string `gorm:"type:text" json:"rules"`
-	InputType           string `gorm:"size:50;default:'text'" json:"input_type"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
+// [Deleted Nest, Egg, and EggVariable structs - moved to egg.go]
 
 // Service defines a deployed instance (game server, app, etc.)
 type Service struct {
@@ -70,7 +20,11 @@ type Service struct {
 	NodeID uint `gorm:"not null" json:"node_id"`
 	Node   Node `json:"node" gorm:"foreignKey:NodeID"`
 
-	EggID uint `gorm:"not null" json:"egg_id"`
+	// Link to Egg
+	NestID uint `gorm:"default:null" json:"nest_id"` // Optional for legacy support initially
+	Nest   Nest `json:"nest" gorm:"foreignKey:NestID"`
+
+	EggID uint `gorm:"default:null" json:"egg_id"` // Optional for legacy support initially
 	Egg   Egg  `json:"egg" gorm:"foreignKey:EggID"`
 
 	// Resources
@@ -87,7 +41,9 @@ type Service struct {
 	Status               string `gorm:"default:'installing'" json:"status"` // installing, running, offline
 	InstallationStage    string `gorm:"size:255;default:''" json:"installation_stage"`
 	InstallationProgress int    `gorm:"default:0" json:"installation_progress"`
-	Environment          string `gorm:"type:text" json:"environment"` // JSON string of overrides
+
+	Environment    string `gorm:"type:text" json:"environment"`     // JSON string of overrides
+	VariableValues string `gorm:"type:text" json:"variable_values"` // JSON key-value pair of variable values
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

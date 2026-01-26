@@ -17,7 +17,7 @@ func Connect() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	} // Note: In dev, maybe don't fatal immediately if user hasn't setup DB yet? For now, fatal is fine.
-    
-    // AutoMigrate will be called here later
+
+	// AutoMigrate removed from here to allow manual control in reset tool/main.go
 	log.Println("Connected to Database")
 }

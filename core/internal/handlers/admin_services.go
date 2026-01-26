@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
+	"github.com/luketaylor45/atlas/core/internal/utils"
 )
 
 type CreateServiceRequest struct {
@@ -71,54 +72,6 @@ func GetServices(c *gin.Context) {
 	c.JSON(http.StatusOK, services)
 }
 
-// GetEggs returns all available service templates
-func GetEggs(c *gin.Context) {
-	var eggs []models.Egg
-	if err := database.DB.Preload("Nest").Preload("Variables").Find(&eggs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch service templates"})
-		return
-	}
-	c.JSON(http.StatusOK, eggs)
-}
-
-// GetNests returns all available nests for categorization
-func GetNests(c *gin.Context) {
-	var nests []models.Nest
-	if err := database.DB.Preload("Eggs.Variables").Find(&nests).Error; err != nil {
-		log.Printf("Error fetching nests: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch nests: " + err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, nests)
-}
-
-type CreateNestRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Description string `json:"description"`
-}
-
-// CreateNest creates a new nest category
-func CreateNest(c *gin.Context) {
-	var req CreateNestRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	nest := models.Nest{
-		UUID:        uuid.New().String(),
-		Name:        req.Name,
-		Description: req.Description,
-	}
-
-	if err := database.DB.Create(&nest).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create nest: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, nest)
-}
-
 // CreateService handles the creation of a new service instance
 func CreateService(c *gin.Context) {
 	var req CreateServiceRequest
@@ -142,10 +95,25 @@ func CreateService(c *gin.Context) {
 
 	// 2. Fetch Egg
 	var egg models.Egg
-	if err := database.DB.First(&egg, req.EggID).Error; err != nil {
+	if err := database.DB.Preload("Variables").First(&egg, req.EggID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Service type not found"})
 		return
 	}
+
+	// 2a. Merge Environment Overrides with Defaults
+	envMap := make(map[string]string)
+	if req.Environment != "" {
+		json.Unmarshal([]byte(req.Environment), &envMap)
+	}
+
+	// Fill in defaults for missing keys
+	for _, v := range egg.Variables {
+		if _, exists := envMap[v.EnvironmentVariable]; !exists {
+			envMap[v.EnvironmentVariable] = v.DefaultValue
+		}
+	}
+	envJSON, _ := json.Marshal(envMap)
+	req.Environment = string(envJSON)
 
 	// 3. Create Service Record
 	service := models.Service{
@@ -183,6 +151,8 @@ func CreateService(c *gin.Context) {
 		return
 	}
 
+	utils.LogActivity(c, service.ID, "create", "service", fmt.Sprintf("Provisioned new service: %s", service.Name), nil)
+
 	c.JSON(http.StatusCreated, service)
 }
 
@@ -207,8 +177,8 @@ func notifyDaemon(node *models.Node, service *models.Service, egg *models.Egg) e
 		"egg_image":         eggImage,
 		"startup_command":   egg.StartupCommand,
 		"environment":       service.Environment, // Use service overrides
-		"install_script":    egg.InstallScript,
-		"install_container": egg.InstallContainer,
+		"install_script":    egg.ScriptInstall,
+		"install_container": egg.ScriptContainer,
 	}
 
 	body, _ := json.Marshal(payload)
@@ -258,6 +228,8 @@ func DeleteService(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete from database"})
 		return
 	}
+
+	utils.LogActivity(c, 0, "delete", "service", fmt.Sprintf("Permanently deleted service: %s", service.Name), map[string]interface{}{"uuid": service.UUID})
 
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
@@ -322,6 +294,8 @@ func UpdateService(c *gin.Context) {
 		log.Printf("[Core] Failed to update daemon for service %s: %v", service.UUID, err)
 	}
 
+	utils.LogActivity(c, service.ID, "update", "service", fmt.Sprintf("Modified configuration for: %s", service.Name), nil)
+
 	c.JSON(http.StatusOK, service)
 }
 
@@ -354,36 +328,4 @@ func notifyDaemonUpdate(node *models.Node, service *models.Service, egg *models.
 		return fmt.Errorf("daemon responded with %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// UpdateNest modifies an existing nest
-func UpdateNest(c *gin.Context) {
-	nestID := c.Param("id")
-	var nest models.Nest
-	if err := database.DB.First(&nest, nestID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Nest not found"})
-		return
-	}
-
-	if err := c.ShouldBindJSON(&nest); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := database.DB.Save(&nest).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update nest"})
-		return
-	}
-
-	c.JSON(http.StatusOK, nest)
-}
-
-// DeleteNest removes a nest
-func DeleteNest(c *gin.Context) {
-	nestID := c.Param("id")
-	if err := database.DB.Delete(&models.Nest{}, nestID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete nest"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }

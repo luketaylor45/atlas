@@ -1,0 +1,55 @@
+{
+    "uuid": "b2c3d4e5-f6a7-4b6c-9d0e-1f2a3b4c5d6e",
+    "name": "Modern 64-bit",
+    "description": "Modern 64-bit Garry's Mod server. Better performance and stability.",
+    "docker_images": [
+        "ghcr.io/pterodactyl/games:source"
+    ],
+    "startup_command": "./srcds_run -game garrysmod -console -port {{SERVER_PORT}} +maxplayers {{MAX_PLAYERS}} +map {{SERVER_MAP}} +sv_setsteamaccount {{STEAM_ACC}} +gamemode {{GAMEMODE}}",
+    "stop_command": "quit",
+    "script_install": "#!/bin/bash\n# Garry's Mod (64-bit) Installation Script\ncd /tmp\necho \"Downloading SteamCMD...\"\ncurl -sSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\nmkdir -p /mnt/server/steamcmd\ntar -xzvf steamcmd.tar.gz -C /mnt/server/steamcmd\nmkdir -p /mnt/server/steamapps\ncd /mnt/server/steamcmd\n\necho \"Installing Garry's Mod (64-bit branch)...\"\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 4020 -beta x86-64 validate +quit || exit 1\n\necho \"Setting up 64-bit libraries...\"\nmkdir -p /mnt/server/.steam/sdk64\ncp -v linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so\n\necho \"Installation complete.\"\n",
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Server Hostname",
+            "env_variable": "HOSTNAME",
+            "default_value": "Atlas Garry's Mod Server",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "The name of your server as it appears in the server browser"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "16",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "Maximum number of players allowed on the server"
+        },
+        {
+            "name": "Server Map",
+            "env_variable": "SERVER_MAP",
+            "default_value": "gm_construct",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "The map to load on server start"
+        },
+        {
+            "name": "Gamemode",
+            "env_variable": "GAMEMODE",
+            "default_value": "sandbox",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "The gamemode folder name"
+        },
+        {
+            "name": "Steam Account (GSLT)",
+            "env_variable": "STEAM_ACC",
+            "default_value": "",
+            "user_editable": true,
+            "user_viewable": true,
+            "description": "Game Server Login Token from https://steamcommunity.com/dev/managegameservers"
+        }
+    ]
+}
