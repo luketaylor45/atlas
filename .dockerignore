@@ -1,0 +1,10 @@
+.git
+.gitignore
+.vscode
+node_modules
+dist
+.env
+README.md
+install.sh
+*.txt
+*.exe

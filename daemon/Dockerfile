@@ -7,6 +7,6 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o atlas-daemon cmd/server/main.go
+RUN GOMAXPROCS=1 go build -p 1 -o atlas-daemon cmd/server/main.go
 
 CMD ["./atlas-daemon"]
