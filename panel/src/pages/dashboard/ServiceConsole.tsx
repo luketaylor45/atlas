@@ -105,7 +105,7 @@ export default function ServiceConsolePage() {
                 });
             };
 
-            ws.onclose = (event) => {
+            ws.onclose = () => {
                 if (!isStopped) {
                     console.log("[Atlas] Console stream disconnected. Retrying in 2s...");
                     reconnectTimer = setTimeout(connect, 2000);

@@ -15,7 +15,7 @@ interface FileInfo {
     is_dir: boolean;
 }
 
-export default function FileManager({ service }: { service: any }) {
+export default function FileManager({ service }: { service?: any }) {
     const { user } = useAuth();
     const { uuid } = useParams();
     const [path, setPath] = useState('');

@@ -6,7 +6,6 @@ import SetupPage from './pages/setup/Setup';
 import Dashboard from './pages/dashboard/Dashboard';
 import MyServices from './pages/dashboard/MyServices';
 import ServiceConsolePage from './pages/dashboard/ServiceConsole';
-import FileManager from './pages/dashboard/FileManager';
 import AdminLayout from './pages/admin/AdminLayout';
 import NodesPage from './pages/admin/Nodes';
 import CreateNodePage from './pages/admin/CreateNode';
@@ -39,7 +38,6 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route path="services" element={<MyServices />} />
             <Route path="services/:uuid" element={<ServiceConsolePage />} />
-            <Route path="services/:uuid/files" element={<FileManager />} />
             <Route path="settings" element={<SettingsPage />} />
 
             {/* Admin Routes */}

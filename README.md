@@ -8,63 +8,64 @@ Atlas is a next-generation game server hosting panel designed for performance, m
 *   **Distributed Architecture**: Run the panel on one server and deploy game nodes globally.
 *   **Docker Containerization**: Every game server runs in an isolated, secure Docker container.
 
-## 📦 Components
-*   **Panel**: The web interface (React/Vite).
-*   **Core**: The central API and database manager (Go).
-*   **Daemon**: The remote agent that runs on game nodes (Go).
+## 📦 Production Deployment (Ubuntu)
 
-## 🛠️ Quick Start (Docker Compose)
+Atlas is designed to run entirely within Docker for maximum reliability and continuous operation.
 
-To run the entire stack (Panel, API, Database, Daemon) with a single command:
-
-1.  **Clone the Repository**:
+### 1. Prerequisites
+*   Ubuntu 20.04/22.04/24.04 LTS
+*   Docker and Docker Compose installed:
     ```bash
-    git clone https://github.com/your-repo/atlas.git
-    cd atlas
-    ```
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+    
+### 2. Installation
+Clone the repository and enter the project directory:
+```bash
+git clone https://github.com/luketaylor45/atlas.git
+cd atlas
 
-2.  **Start Services**:
-    ```bash
-    docker-compose up -d --build
-    ```
+1.  Open `docker-compose.yml`.
+2.  Update the following environment variables:
+    *   **Atlas Database Service**:
+        *   `POSTGRES_USER`: Choose a secure username.
+        *   `POSTGRES_PASSWORD`: Choose a strong password.
+    *   **Atlas Core Service**:
+        *   `DATABASE_URL`: Update the string with your new user and password: `host=database user=<USER> password=<PASS> dbname=atlas...`
 
-3.  **Access the Panel**:
-    Open your browser and navigate to `http://<your-server-ip>`.
+### 4. Launching the Platform
+Run the following command to build and start the entire stack in the background:
+```bash
+docker-compose up -d --build
+```
 
-The setup process runs automatically on the first boot, creating the necessary database schema and importing default game templates from the `eggs/` directory.
+**Services will be available at:**
+*   **Control Panel**: `http://<your-server-ip>`
+*   **Core API**: `http://<your-server-ip>:8080`
+*   **SFTP Port**: `2022`
 
-## 🥚 Adding Game Templates (Eggs)
-To add new game types to your platform, simply add their JSON definitions to the `eggs/` directory:
+All services are configured for `restart: always`, meaning they will automatically restart on server reboots or process failures.
 
+## 🥚 Managing Game Templates (Eggs)
+Atlas uses a hierarchical file-based system for game environments. Add your JSON definitions to the `eggs/` directory on the host:
+
+**Directory Structure:**
 ```text
 eggs/
-├── games/
-│   ├── gmod/
-│   │   └── modern.json
+├── games/                  # Parent Category
+│   ├── gmod/               # Sub-Category
+│   │   └── modern.json     # The Egg Definition
 │   └── minecraft/
 │       └── paper.json
 ```
 
-Then restart the core service or use the import feature in the Admin Panel.
+The Core service will automatically import these files into the database on every startup.
 
-## 💻 Development
-To run Atlas locally for contribution:
-
-1.  **Start the Panel**:
-    ```bash
-    cd panel
-    npm run dev
-    ```
-2.  **Start the Core**:
-    ```bash
-    cd core
-    go run cmd/server/main.go
-    ```
-3.  **Start the Daemon**:
-    ```bash
-    cd daemon
-    go run cmd/server/main.go
-    ```
+## �️ Multi-Node Deployment
+To add additional remote nodes to your Atlas cluster:
+1.  On the remote server, only deploy the `daemon` service using its own `docker-compose.yml`.
+2.  Ensure the `CORE_URL` points back to your main panel's IP.
+3.  Add the node in the **Admin > Nodes** section of the panel.
 
 ## 📄 License
 MIT License
