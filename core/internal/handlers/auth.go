@@ -132,7 +132,7 @@ func InitialSetup(c *gin.Context) {
 	}
 
 	// Seed default eggs as part of the setup procedure
-	database.SeedDefaults()
+	//database.SeedDefaults()
 
 	// Generate token for automatic login
 	token, _ := utils.GenerateToken(user.ID, user.IsAdmin)

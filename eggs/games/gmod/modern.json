@@ -1,55 +1,45 @@
 {
-    "uuid": "b2c3d4e5-f6a7-4b6c-9d0e-1f2a3b4c5d6e",
-    "name": "Modern 64-bit",
-    "description": "Modern 64-bit Garry's Mod server. Better performance and stability.",
+    "uuid": "atlas-gmod-x64",
+    "name": "Modern (x86-64)",
+    "description": "64-bit Garry's Mod branch for better performance.",
     "docker_images": [
-        "ghcr.io/pterodactyl/games:source"
+        "ghcr.io/ptero-eggs/games:source"
     ],
-    "startup_command": "./srcds_run -game garrysmod -console -port {{SERVER_PORT}} +maxplayers {{MAX_PLAYERS}} +map {{SERVER_MAP}} +sv_setsteamaccount {{STEAM_ACC}} +gamemode {{GAMEMODE}}",
+    "startup_command": "export HOME=/home/container; export LD_LIBRARY_PATH=/home/container/bin/linux64:/home/container/bin:/home/container; ./srcds_run_x64 -game garrysmod -console -port {{SERVER_PORT}} +ip 0.0.0.0 +map {{SRCDS_MAP}} +gamemode {{GAMEMODE}} -strictportbind -norestart +sv_setsteamaccount {{STEAM_TOKEN}} +maxplayers {{MAX_PLAYERS}} -tickrate {{TICKRATE}} $( [ \"$LUA_REFRESH\" == \"1\" ] || printf %s '-disableluarefresh' )",
     "stop_command": "quit",
-    "script_install": "#!/bin/bash\n# Garry's Mod (64-bit) Installation Script\ncd /tmp\necho \"Downloading SteamCMD...\"\ncurl -sSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\nmkdir -p /mnt/server/steamcmd\ntar -xzvf steamcmd.tar.gz -C /mnt/server/steamcmd\nmkdir -p /mnt/server/steamapps\ncd /mnt/server/steamcmd\n\necho \"Installing Garry's Mod (64-bit branch)...\"\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 4020 -beta x86-64 validate +quit || exit 1\n\necho \"Setting up 64-bit libraries...\"\nmkdir -p /mnt/server/.steam/sdk64\ncp -v linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so\n\necho \"Installation complete.\"\n",
+    "script_install": "#!/bin/bash\nset -e\ncd /tmp && mkdir -p /mnt/server/steamcmd\ncurl -sSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\ntar -xzvf steamcmd.tar.gz -C /mnt/server/steamcmd\n\nexport HOME=/mnt/server\n/mnt/server/steamcmd/steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 4020 -beta x86-64 validate +quit\n\n# Fix 64-bit Libraries\nmkdir -p /mnt/server/.steam/sdk64\ncp -vf /mnt/server/steamcmd/linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so\ncp -vf /mnt/server/steamcmd/linux64/steamclient.so /mnt/server/bin/linux64/steamclient.so\n\necho \"[Atlas] Setting execution bits...\"\nfind /mnt/server -maxdepth 1 -name \"srcds*\" -exec chmod +x {} +\nfind /mnt/server/bin -name \"*linux64*\" -exec chmod +x {} +\n",
     "script_container": "ghcr.io/pterodactyl/installers:debian",
     "script_entry": "bash",
     "variables": [
         {
-            "name": "Server Hostname",
-            "env_variable": "HOSTNAME",
-            "default_value": "Atlas Garry's Mod Server",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "The name of your server as it appears in the server browser"
+            "name": "Map",
+            "env_variable": "SRCDS_MAP",
+            "default_value": "gm_flatgrass"
+        },
+        {
+            "name": "Steam Token",
+            "env_variable": "STEAM_TOKEN",
+            "default_value": ""
         },
         {
             "name": "Max Players",
             "env_variable": "MAX_PLAYERS",
-            "default_value": "16",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "Maximum number of players allowed on the server"
+            "default_value": "32"
         },
         {
-            "name": "Server Map",
-            "env_variable": "SERVER_MAP",
-            "default_value": "gm_construct",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "The map to load on server start"
+            "name": "Tickrate",
+            "env_variable": "TICKRATE",
+            "default_value": "22"
         },
         {
             "name": "Gamemode",
             "env_variable": "GAMEMODE",
-            "default_value": "sandbox",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "The gamemode folder name"
+            "default_value": "sandbox"
         },
         {
-            "name": "Steam Account (GSLT)",
-            "env_variable": "STEAM_ACC",
-            "default_value": "",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "Game Server Login Token from https://steamcommunity.com/dev/managegameservers"
+            "name": "Lua Refresh",
+            "env_variable": "LUA_REFRESH",
+            "default_value": "0"
         }
     ]
 }

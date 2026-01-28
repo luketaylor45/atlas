@@ -20,7 +20,7 @@ func main() {
 	database.DB.AutoMigrate(&models.User{}, &models.Node{}, &models.Nest{}, &models.Egg{}, &models.EggVariable{}, &models.Service{}, &models.ServiceUser{}, &models.ActivityLog{}, &models.News{})
 
 	// Seed basic data (Nests/Categories)
-	database.SeedDefaults()
+	//database.SeedDefaults()
 
 	r := gin.Default()
 

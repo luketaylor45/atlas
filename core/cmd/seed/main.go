@@ -14,6 +14,12 @@ import (
 	"github.com/luketaylor45/atlas/core/internal/models"
 )
 
+// Simplified Nest Structure for JSON Import
+type JSONNest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 // Simplified Egg Structure for JSON Import
 type JSONEgg struct {
 	UUID            string       `json:"uuid"`
@@ -54,88 +60,106 @@ func main() {
 }
 
 func scanEggsDirectory() {
-	// 1. Get Root "eggs" directory
-	// In production, this might be /var/lib/atlas/eggs, or ./eggs locally
 	root := "eggs"
 	if _, err := os.Stat(root); os.IsNotExist(err) {
-		log.Printf("[Seed] Warning: '%s' directory not found. Skipping egg import.", root)
-		return
+		root = "Eggs"
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			log.Printf("[Seed] CRITICAL: Neither 'eggs' nor 'Eggs' directory found.")
+			return
+		}
 	}
 
-	// 2. Read Top-Level Directories (Root Nests, e.g. "games", "voice")
-	topLevels, err := ioutil.ReadDir(root)
-	if err != nil {
-		log.Fatalf("[Seed] Failed to read eggs directory: %v", err)
-	}
+	log.Printf("[Seed] Scanning directory: %s", root)
+	topLevels, _ := ioutil.ReadDir(root)
 
+	foundCount := 0
 	for _, top := range topLevels {
 		if !top.IsDir() {
 			continue
 		}
 
-		// Create/Update Root Nest
-		rootNest := ensureNest(top.Name(), "", nil)
-
-		// 3. Read Sub-Directories (Sub Nests, e.g. "gmod", "minecraft")
-		subPath := filepath.Join(root, top.Name())
-		subLevels, err := ioutil.ReadDir(subPath)
-		if err != nil {
-			log.Printf("[Seed] Failed to read subdirectory %s: %v", subPath, err)
-			continue
+		// Try to load Category Metadata
+		catName := top.Name()
+		catDesc := "Main category managed via file system."
+		if data, err := ioutil.ReadFile(filepath.Join(root, top.Name(), "nest.json")); err == nil {
+			var jn JSONNest
+			if err := json.Unmarshal(data, &jn); err == nil {
+				catName = jn.Name
+				catDesc = jn.Description
+			}
 		}
+
+		rootNest := ensureNest(catName, top.Name(), catDesc, nil)
+
+		subPath := filepath.Join(root, top.Name())
+		subLevels, _ := ioutil.ReadDir(subPath)
 
 		for _, sub := range subLevels {
 			if !sub.IsDir() {
-				// Files in top-level folder? Maybe generic eggs directly under category
-				if filepath.Ext(sub.Name()) == ".json" {
+				if filepath.Ext(sub.Name()) == ".json" && sub.Name() != "nest.json" {
 					importEgg(filepath.Join(subPath, sub.Name()), rootNest)
+					foundCount++
 				}
 				continue
 			}
 
-			// Create/Update Sub Nest
-			subNest := ensureNest(sub.Name(), "", &rootNest.ID)
-
-			// 4. Read Files in Sub-Directory (The Eggs)
-			eggPath := filepath.Join(subPath, sub.Name())
-			eggFiles, err := ioutil.ReadDir(eggPath)
-			if err != nil {
-				continue
+			// Try to load Sub-Category Metadata
+			subName := sub.Name()
+			subDesc := "Sub-category managed via file system."
+			if data, err := ioutil.ReadFile(filepath.Join(subPath, sub.Name(), "nest.json")); err == nil {
+				var jn JSONNest
+				if err := json.Unmarshal(data, &jn); err == nil {
+					subName = jn.Name
+					subDesc = jn.Description
+				}
 			}
 
+			subNest := ensureNest(subName, sub.Name(), subDesc, &rootNest.ID)
+
+			eggPath := filepath.Join(subPath, sub.Name())
+			eggFiles, _ := ioutil.ReadDir(eggPath)
 			for _, f := range eggFiles {
-				if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
+				if !f.IsDir() && filepath.Ext(f.Name()) == ".json" && f.Name() != "nest.json" {
 					importEgg(filepath.Join(eggPath, f.Name()), subNest)
+					foundCount++
 				}
 			}
 		}
 	}
+	log.Printf("[Seed] Seeding complete. Processed %d eggs.", foundCount)
 }
 
-func ensureNest(name, description string, parentID *uint) models.Nest {
+func ensureNest(prettyName, dirName, description string, parentID *uint) models.Nest {
 	var nest models.Nest
-	slug := strings.ToLower(name)
+	slug := strings.ToLower(dirName)
 
-	// Try to find by name within parent scope
-	query := database.DB.Where("name = ?", name)
+	// In the panel, users might rename 'games' to 'Game Servers'.
+	// We lookup by the slug (directory name) so we don't create duplicates.
+	query := database.DB.Where("code = ?", slug)
 	if parentID != nil {
 		query = query.Where("parent_id = ?", parentID)
 	} else {
 		query = query.Where("parent_id IS NULL")
 	}
 
+	// Format pretty name if it's just the directory name
+	if prettyName == dirName {
+		prettyName = strings.Title(strings.ReplaceAll(dirName, "_", " "))
+	}
+
 	if err := query.First(&nest).Error; err != nil {
 		nest = models.Nest{
 			UUID:        uuid.New().String(),
-			Name:        name, // Capitalize first letter? Using directory name as is for now
+			Name:        prettyName,
 			Code:        slug,
 			Description: description,
 			ParentID:    parentID,
 		}
-		database.DB.Create(&nest)
-		log.Printf("[Seed] Created Nest: %s", name)
-	} else {
-		// Update existing? Unnecessary for now unless we add metadata files for nests
+		if err := database.DB.Create(&nest).Error; err != nil {
+			log.Printf("[Seed] Failed to create nest %s: %v", prettyName, err)
+		} else {
+			log.Printf("[Seed] Created Nest: %s (%s)", prettyName, slug)
+		}
 	}
 	return nest
 }

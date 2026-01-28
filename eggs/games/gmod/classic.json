@@ -1,0 +1,40 @@
+{
+    "uuid": "atlas-gmod-regular",
+    "name": "Standard (x32)",
+    "description": "Standard 32-bit Garry's Mod server.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/games:source"
+    ],
+    "startup_command": "./srcds_run -game garrysmod -console -port {{SERVER_PORT}} +ip 0.0.0.0 +map {{SRCDS_MAP}} +gamemode {{GAMEMODE}} -strictportbind -norestart +sv_setsteamaccount {{STEAM_TOKEN}} +maxplayers {{MAX_PLAYERS}} -tickrate {{TICKRATE}}",
+    "stop_command": "quit",
+    "script_install": "#!/bin/bash\nset -e\ncd /tmp && mkdir -p /mnt/server/steamcmd\ncurl -sSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\ntar -xzvf steamcmd.tar.gz -C /mnt/server/steamcmd\n\nexport HOME=/mnt/server\n/mnt/server/steamcmd/steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 4020 validate +quit\n\n# Fix Steam Libraries for 32-bit to prevent LAN mode\nmkdir -p /mnt/server/.steam/sdk32\ncp -vf /mnt/server/steamcmd/linux32/steamclient.so /mnt/server/.steam/sdk32/steamclient.so\ncp -vf /mnt/server/steamcmd/linux32/steamclient.so /mnt/server/bin/steamclient.so\n\necho \"[Atlas] Setting execution bits...\"\nfind /mnt/server -maxdepth 1 -name \"srcds*\" -exec chmod +x {} +\n",
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Map",
+            "env_variable": "SRCDS_MAP",
+            "default_value": "gm_flatgrass"
+        },
+        {
+            "name": "Steam Token",
+            "env_variable": "STEAM_TOKEN",
+            "default_value": ""
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "16"
+        },
+        {
+            "name": "Tickrate",
+            "env_variable": "TICKRATE",
+            "default_value": "22"
+        },
+        {
+            "name": "Gamemode",
+            "env_variable": "GAMEMODE",
+            "default_value": "sandbox"
+        }
+    ]
+}

@@ -75,8 +75,11 @@ export default function ServiceConsolePage() {
                 ? `${window.location.hostname}:8081`
                 : `${service.node.address}:${service.node.port}`;
 
-            console.log(`[Atlas] Connecting to console: ws://${nodeAddr}/api/servers/${uuid}/console`);
-            const ws = new WebSocket(`ws://${nodeAddr}/api/servers/${uuid}/console`);
+            // Use wss:// if the page is loaded over HTTPS, otherwise use ws://
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+
+            console.log(`[Atlas] Connecting to console: ${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`);
+            const ws = new WebSocket(`${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`);
             wsRef.current = ws;
 
             ws.onmessage = (event) => {
@@ -138,9 +141,12 @@ export default function ServiceConsolePage() {
         }
 
         const fetchStats = async () => {
+            // Use https:// if page is loaded over HTTPS, otherwise use http://
+            const httpProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
+
             const nodeAddr = service.node?.address === 'localhost' || service.node?.address === '127.0.0.1'
-                ? `http://${window.location.hostname}:8081`
-                : `http://${service.node?.address}:${service.node?.port}`;
+                ? `${httpProtocol}://${window.location.hostname}:8081`
+                : `${httpProtocol}://${service.node?.address}:${service.node?.port}`;
 
             try {
                 const res = await fetch(`${nodeAddr}/api/servers/${uuid}/stats`);

@@ -1,0 +1,31 @@
+{
+    "uuid": "atlas-mc-vanilla",
+    "name": "Vanilla",
+    "description": "Official Minecraft server software.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:java_22",
+        "ghcr.io/ptero-eggs/yolks:java_21",
+        "ghcr.io/ptero-eggs/yolks:java_17",
+        "ghcr.io/ptero-eggs/yolks:java_16",
+        "ghcr.io/ptero-eggs/yolks:java_11",
+        "ghcr.io/ptero-eggs/yolks:java_8"
+    ],
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}",
+    "stop_command": "stop",
+    "script_install": "#!/bin/ash\n# Vanilla Installation Script\ncd /mnt/server\n\nif [ -z \"${MINECRAFT_VERSION}\" ] || [ \"${MINECRAFT_VERSION}\" == \"latest\" ]; then\n    MANIFEST_URL=\"https://launchermeta.mojang.com/mc/game/version_manifest.json\"\n    # Get the latest release version\n    VERSION=$(curl -s $MANIFEST_URL | jq -r '.latest.release')\nelse\n    VERSION=${MINECRAFT_VERSION}\nfi\n\necho \"[Atlas] Target Version: $VERSION\"\n\n# Fetch Version Manifest\nMANIFEST_URL=\"https://launchermeta.mojang.com/mc/game/version_manifest.json\"\nVERSION_URL=$(curl -s $MANIFEST_URL | jq -r --arg VER \"$VERSION\" '.versions[] | select(.id == $VER) | .url')\n\nif [ -z \"$VERSION_URL\" ]; then\n    echo \"[Atlas] Error: Version $VERSION not found.\"\n    exit 1\nfi\n\n# Fetch Server Download URL\nDOWNLOAD_URL=$(curl -s $VERSION_URL | jq -r '.downloads.server.url')\n\necho \"[Atlas] Downloading from $DOWNLOAD_URL...\"\ncurl -o ${SERVER_JARFILE} $DOWNLOAD_URL\necho \"eula=true\" > eula.txt\n",
+    "script_container": "ghcr.io/pterodactyl/installers:alpine",
+    "script_entry": "ash",
+    "variables": [
+        {
+            "name": "Minecraft Version",
+            "env_variable": "MINECRAFT_VERSION",
+            "default_value": "latest",
+            "description": "The version to download (e.g. 1.20.1)."
+        },
+        {
+            "name": "Server Jar File",
+            "env_variable": "SERVER_JARFILE",
+            "default_value": "server.jar"
+        }
+    ]
+}

@@ -106,7 +106,7 @@ export default function ImportEggPage() {
         };
 
         if (presets[type]) {
-            setContent(JSON.stringify(presets[type], null, 4));
+            //setContent(JSON.stringify(presets[type], null, 4));
         }
     };
 

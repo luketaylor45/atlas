@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -182,7 +183,9 @@ func notifyDaemon(node *models.Node, service *models.Service, egg *models.Egg) e
 	}
 
 	body, _ := json.Marshal(payload)
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	req.Header.Set("X-Node-Token", node.Token)
 	req.Header.Set("Content-Type", "application/json")
@@ -220,12 +223,22 @@ func DeleteService(c *gin.Context) {
 		return
 	}
 
+	// Try to notify daemon (with short timeout)
 	if err := notifyDaemonDelete(&service.Node, service.UUID); err != nil {
 		log.Printf("Failed to notify node for deletion: %v", err)
 	}
 
+	// Delete related records first to avoid foreign key constraints
+	// 1. Delete service_users
+	database.DB.Where("service_id = ?", service.ID).Delete(&models.ServiceUser{})
+
+	// 2. Delete activity logs (if they exist)
+	database.DB.Exec("DELETE FROM activity_logs WHERE service_id = ?", service.ID)
+
+	// 3. Now delete the service itself
 	if err := database.DB.Unscoped().Delete(&service).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete from database"})
+		log.Printf("[Core] Error deleting service from database: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete from database: " + err.Error()})
 		return
 	}
 
@@ -237,7 +250,9 @@ func DeleteService(c *gin.Context) {
 func notifyDaemonDelete(node *models.Node, uuid string) error {
 	url := fmt.Sprintf("http://%s:%s/api/servers/%s", node.Address, node.Port, uuid)
 
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 1 * time.Second,
+	}
 	req, _ := http.NewRequest("DELETE", url, nil)
 	req.Header.Set("X-Node-Token", node.Token)
 
@@ -313,7 +328,9 @@ func notifyDaemonUpdate(node *models.Node, service *models.Service, egg *models.
 	}
 
 	body, _ := json.Marshal(payload)
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
 	req, _ := http.NewRequest("PUT", url, bytes.NewBuffer(body))
 	req.Header.Set("X-Node-Token", node.Token)
 	req.Header.Set("Content-Type", "application/json")

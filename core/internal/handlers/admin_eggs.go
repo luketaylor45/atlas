@@ -18,14 +18,14 @@ type ImportEggRequest struct {
 // GetEggs returns all eggs
 func GetEggs(c *gin.Context) {
 	var eggs []models.Egg
-	database.DB.Preload("Nest").Preload("Variables").Find(&eggs)
+	database.DB.Preload("Nest.Parent").Preload("Variables").Find(&eggs)
 	c.JSON(http.StatusOK, eggs)
 }
 
 // GetNests returns all nests
 func GetNests(c *gin.Context) {
 	var nests []models.Nest
-	database.DB.Find(&nests)
+	database.DB.Preload("SubNests").Preload("SubNests.Eggs.Variables").Preload("Eggs.Variables").Find(&nests)
 	c.JSON(http.StatusOK, nests)
 }
 

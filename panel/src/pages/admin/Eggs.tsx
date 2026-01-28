@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
-import { Egg, Package, Trash2, Edit, Plus, FolderPlus, Search, X, Settings, Info } from 'lucide-react';
+import { Egg, Package, Trash2, Edit, Plus, FolderPlus, Search, X, Settings, Info, ChevronRight } from 'lucide-react';
 
 export default function AdminEggsPage() {
     const navigate = useNavigate();
@@ -122,49 +122,69 @@ export default function AdminEggsPage() {
                     </h2>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                     {nests.filter(n => !n.parent_id).map(nest => (
                         <div key={nest.id} className="space-y-4">
-                            <div className="panel-card p-6 flex flex-col justify-between group bg-primary/5 border-primary/20">
+                            {/* Root Category Header */}
+                            <div className="panel-card p-6 flex flex-col justify-between group bg-primary/5 border-primary/20 hover:border-primary/40 transition-all rounded-[2rem]">
                                 <div>
                                     <div className="flex items-center justify-between mb-4">
-                                        <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                                            <Package size={20} />
+                                        <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
+                                            <Package size={24} />
                                         </div>
                                         <div className="flex items-center gap-1">
                                             <button onClick={() => setEditingNest(nest)} className="p-2 hover:bg-secondary rounded-lg text-muted transition-colors">
-                                                <Edit size={14} />
+                                                <Edit size={16} />
                                             </button>
                                             <button onClick={() => deleteNest(nest.id)} className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors">
-                                                <Trash2 size={14} />
+                                                <Trash2 size={16} />
                                             </button>
                                         </div>
                                     </div>
-                                    <h3 className="font-bold text-lg group-hover:text-primary transition-colors uppercase tracking-tight">{nest.name}</h3>
-                                    <p className="text-xs text-muted font-medium mt-1 line-clamp-2">{nest.description || 'Global category container.'}</p>
+                                    <h3 className="font-bold text-xl group-hover:text-primary transition-colors tracking-tight">{nest.name}</h3>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">
+                                            {eggs.filter(e => e.nest_id === nest.id || nests.filter(sn => sn.parent_id === nest.id).some(sn => sn.id === e.nest_id)).length} Templates
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-muted font-medium mt-2 line-clamp-2">{nest.description || 'Main category managed via file system.'}</p>
                                 </div>
                             </div>
-                            <div className="pl-6 space-y-3 border-l-2 border-border/50 ml-4">
+
+                            {/* Sub-Categories & Eggs */}
+                            <div className="pl-6 space-y-4 border-l-2 border-border/30 ml-6">
                                 {nests.filter(sub => sub.parent_id === nest.id).map(sub => (
-                                    <div key={sub.id} className="panel-card p-4 flex items-center justify-between group hover:border-primary/40 transition-all">
-                                        <div>
-                                            <div className="font-bold text-sm">{sub.name}</div>
-                                            <div className="text-[10px] text-muted font-bold uppercase tracking-widest">{sub.eggs?.length || 0} Eggs</div>
+                                    <div key={sub.id} className="space-y-2">
+                                        <div className="flex items-center justify-between group">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                                                <span className="font-bold text-sm text-foreground/80 uppercase tracking-widest">{sub.name}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                                <button onClick={() => setEditingNest(sub)} className="text-muted hover:text-foreground p-1"><Edit size={12} /></button>
+                                                <button onClick={() => deleteNest(sub.id)} className="text-muted hover:text-red-500 p-1"><Trash2 size={12} /></button>
+                                            </div>
                                         </div>
-                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                                            <button onClick={() => setEditingNest(sub)} className="p-1.5 hover:bg-secondary rounded-lg text-muted transition-colors">
-                                                <Edit size={12} />
-                                            </button>
-                                            <button onClick={() => deleteNest(sub.id)} className="p-1.5 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors">
-                                                <Trash2 size={12} />
-                                            </button>
+
+                                        {/* List Eggs in this Sub-Nest */}
+                                        <div className="grid grid-cols-1 gap-2">
+                                            {eggs.filter(egg => egg.nest_id === sub.id).map(egg => (
+                                                <div key={egg.id} className="panel-card !p-3 !bg-background border-border/40 hover:border-primary/30 cursor-pointer group/egg flex items-center justify-between" onClick={() => setEditingEgg(egg)}>
+                                                    <div className="flex items-center gap-2">
+                                                        <Egg size={12} className="text-orange-500" />
+                                                        <span className="text-[11px] font-bold text-muted group-hover/egg:text-primary transition-colors">{egg.name}</span>
+                                                    </div>
+                                                    <ChevronRight size={12} className="text-muted/30 group-hover/egg:text-primary group-hover/egg:translate-x-1 transition-all" />
+                                                </div>
+                                            ))}
+                                            {eggs.filter(egg => egg.nest_id === sub.id).length === 0 && (
+                                                <div className="text-[9px] font-bold text-muted/40 italic uppercase tracking-wider pl-4">No templates found</div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
                                 {nests.filter(sub => sub.parent_id === nest.id).length === 0 && (
-                                    <div className="py-3 px-4 border border-dashed border-border/60 rounded-2xl text-[10px] font-bold text-muted uppercase tracking-widest text-center">
-                                        No sub-categories
-                                    </div>
+                                    <div className="py-2 text-[10px] font-bold text-muted/30 uppercase tracking-widest pl-4">No sub-categories</div>
                                 )}
                             </div>
                         </div>

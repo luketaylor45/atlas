@@ -24,6 +24,7 @@ nano .env
 ```
 *   **Database**: Update `DB_USER` and `DB_PASS`.
 *   **Ports**: Customize `ATLAS_PANEL_PORT` (default 4000) if needed.
+*   **Storage**: Customize `DATA_PATH` (default `/var/lib/atlas/data`) to choose where game files are stored on your host.
 *   **Node Token**: Leave this blank or as default for the very first boot.
 
 ### 3. First Boot (Registration)

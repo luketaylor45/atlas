@@ -165,30 +165,33 @@ export default function CreateServicePage() {
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                {selectedNest.sub_nests.map((game: any) => {
-                                    const isGameSelected = selectedEgg && game.eggs?.some((e: any) => e.id === selectedEgg.id);
+                                {selectedNest.sub_nests?.map((game: any) => {
+                                    const isGameActive = selectedEgg && game.eggs?.some((e: any) => e.id === selectedEgg.id);
                                     return (
                                         <div
                                             key={game.id}
                                             onClick={() => {
                                                 if (game.eggs && game.eggs.length > 0) {
-                                                    setSelectedEgg(game.eggs[0]);
+                                                    // Only auto-select first egg if one isn't already selected from this game
+                                                    if (!isGameActive) {
+                                                        setSelectedEgg(game.eggs[0]);
+                                                    }
                                                 }
                                             }}
                                             className={clsx(
                                                 "panel-card p-6 cursor-pointer transition-all border-2 flex flex-col gap-4 items-center text-center",
-                                                isGameSelected ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "border-border/40 hover:border-primary/20"
+                                                isGameActive ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "border-border/40 hover:border-primary/20"
                                             )}
                                         >
                                             <div className={clsx(
                                                 "w-16 h-16 rounded-2xl flex items-center justify-center transition-colors",
-                                                isGameSelected ? "bg-primary text-white" : "bg-secondary text-muted"
+                                                isGameActive ? "bg-primary text-white" : "bg-secondary text-muted"
                                             )}>
                                                 <Server size={32} />
                                             </div>
                                             <div>
                                                 <h5 className="font-bold text-lg">{game.name}</h5>
-                                                <p className="text-[10px] text-muted font-medium mt-1">{game.description}</p>
+                                                <p className="text-[10px] text-muted font-medium mt-1">{game.description || 'Service grouping container.'}</p>
                                             </div>
                                         </div>
                                     );

@@ -1,49 +1,42 @@
 {
-    "uuid": "c3d4e5f6-a7b8-4c7d-0e1f-2a3b4c5d6e7f",
-    "name": "Paper / Spigot",
-    "description": "High-performance Minecraft server using Paper or Spigot. Supports plugins.",
+    "uuid": "atlas-mc-paper",
+    "name": "Paper",
+    "description": "High performance Spigot fork.",
     "docker_images": [
-        "ghcr.io/pterodactyl/yolks:java_17",
-        "ghcr.io/pterodactyl/yolks:java_18",
-        "ghcr.io/pterodactyl/yolks:java_21"
+        "ghcr.io/ptero-eggs/yolks:java_22",
+        "ghcr.io/ptero-eggs/yolks:java_21",
+        "ghcr.io/ptero-eggs/yolks:java_17",
+        "ghcr.io/ptero-eggs/yolks:java_16",
+        "ghcr.io/ptero-eggs/yolks:java_11",
+        "ghcr.io/ptero-eggs/yolks:java_8"
     ],
-    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}",
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
     "stop_command": "stop",
-    "script_install": "#!/bin/bash\ncd /mnt/server\nPAPER_VERSION=${PAPER_VERSION:-1.20.4}\necho \"Downloading Paper ${PAPER_VERSION}...\"\ncurl -o server.jar -L \"https://papermc.io/api/v2/projects/paper/versions/${PAPER_VERSION}/builds/latest/downloads/paper-${PAPER_VERSION}.jar\" || echo \"Download failed, please set correct version\"\necho \"eula=true\" > eula.txt\necho \"Installation complete.\"\n",
-    "script_container": "eclipse-temurin:17-jdk",
-    "script_entry": "bash",
+    "script_install": "#!/bin/ash\n# Paper Installation Script\nPROJECT=paper\ncd /mnt/server\n\nif [ -n \"${DL_PATH}\" ]; then\n    echo \"Using supplied download url: ${DL_PATH}\"\n    DOWNLOAD_URL=$(echo ${DL_PATH})\nelse\n    # Logic to fetch latest build from Paper API\n    VER_EXISTS=$(curl -s https://fill.papermc.io/v3/projects/${PROJECT} | jq -r --arg VERSION $MINECRAFT_VERSION '.versions | any(.[]; index($VERSION))' | grep -m1 true)\n    LATEST_VERSION=$(curl -s https://fill.papermc.io/v3/projects/${PROJECT} | jq -r '.versions | to_entries | .[0].value[0]')\n\n    if [ \"${VER_EXISTS}\" == \"true\" ]; then\n        VERSION=${MINECRAFT_VERSION}\n    else\n        echo \"Defaulting to latest version\"\n        VERSION=${LATEST_VERSION}\n    fi\n\n    LATEST_BUILD=$(curl -s https://fill.papermc.io/v3/projects/${PROJECT}/versions/${VERSION} | jq -r '.builds | .[-1]')\n    if [ \"${BUILD_NUMBER}\" != \"latest\" ]; then BUILD=${BUILD_NUMBER}; else BUILD=${LATEST_BUILD}; fi\n    \n    JAR_NAME=\"${PROJECT}-${VERSION}-${BUILD}.jar\"\n    DOWNLOAD_URL=\"https://api.papermc.io/v2/projects/${PROJECT}/versions/${VERSION}/builds/${BUILD}/downloads/${JAR_NAME}\"\nfi\n\necho \"Downloading ${DOWNLOAD_URL}...\"\ncurl -o ${SERVER_JARFILE} ${DOWNLOAD_URL}\necho \"eula=true\" > eula.txt\n",
+    "script_container": "ghcr.io/pterodactyl/installers:alpine",
+    "script_entry": "ash",
     "variables": [
         {
-            "name": "Server MOTD",
-            "env_variable": "SERVER_MOTD",
-            "default_value": "An Atlas Minecraft Server",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "Message of the day shown in the server list"
+            "name": "Minecraft Version",
+            "env_variable": "MINECRAFT_VERSION",
+            "default_value": "latest",
+            "description": "Version of Minecraft to install."
         },
         {
-            "name": "Max Players",
-            "env_variable": "MAX_PLAYERS",
-            "default_value": "20",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "Maximum players allowed"
+            "name": "Build Number",
+            "env_variable": "BUILD_NUMBER",
+            "default_value": "latest",
+            "description": "Build number or 'latest'."
         },
         {
-            "name": "Server JAR File",
+            "name": "Server Jar File",
             "env_variable": "SERVER_JARFILE",
-            "default_value": "server.jar",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "Name of the server JAR file"
+            "default_value": "server.jar"
         },
         {
-            "name": "Difficulty",
-            "env_variable": "DIFFICULTY",
-            "default_value": "normal",
-            "user_editable": true,
-            "user_viewable": true,
-            "description": "Game difficulty: peaceful, easy, normal, or hard"
+            "name": "Download URL",
+            "env_variable": "DL_PATH",
+            "default_value": ""
         }
     ]
 }

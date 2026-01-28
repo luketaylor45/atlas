@@ -6,12 +6,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/luketaylor45/atlas/daemon/internal/config"
 )
 
 type Installer struct {
@@ -37,9 +39,17 @@ func (i *Installer) Install(ctx context.Context, uuid string, installImage strin
 	reader.Close()
 
 	// 2. Prepare Data Directory
-	hostDataDir := fmt.Sprintf("C:\\AtlasData\\%s", uuid)
+	hostDataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
 	if err := os.MkdirAll(hostDataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
+	}
+
+	// Force ownership so no permission errors when installing
+	uid := 1000
+	gid := 1000
+
+	if err := os.Chown(hostDataDir, uid, gid); err != nil {
+		return fmt.Errorf("failed to set directory ownership: %v", err)
 	}
 
 	// 3. Prepare Environment

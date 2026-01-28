@@ -96,14 +96,14 @@ func CreateServer(c *gin.Context) {
 		Mounts: []mount.Mount{
 			{
 				Type:   mount.TypeBind,
-				Source: fmt.Sprintf("C:\\AtlasData\\%s", req.UUID),
+				Source: filepath.Join(config.NodeConfig.DataPath, req.UUID),
 				Target: "/home/container",
 			},
 		},
 	}
 
 	// Ensure data directory exists
-	dataDir := fmt.Sprintf("C:\\AtlasData\\%s", req.UUID)
+	dataDir := filepath.Join(config.NodeConfig.DataPath, req.UUID)
 	os.MkdirAll(dataDir, 0755)
 
 	// 3. Handle Installation Phase
@@ -278,13 +278,13 @@ func HandleReinstall(c *gin.Context) {
 	docker.Client.ContainerStop(ctx, uuid, container.StopOptions{})
 
 	// 2. Wipe files except start.sh and steamcmd
-	dataDir := fmt.Sprintf("C:\\AtlasData\\%s", uuid)
+	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
 	files, _ := os.ReadDir(dataDir)
 	for _, f := range files {
 		if f.Name() == "start.sh" || f.Name() == "steamcmd" {
 			continue
 		}
-		os.RemoveAll(dataDir + "\\" + f.Name())
+		os.RemoveAll(filepath.Join(dataDir, f.Name()))
 	}
 
 	// 3. Notify Core
@@ -329,7 +329,7 @@ func HandleReinstall(c *gin.Context) {
 }
 
 func writeStartScript(uuid string, startupCmd string, port int, memory int64, environment string, nodeToken string) {
-	dataDir := fmt.Sprintf("C:\\AtlasData\\%s", uuid)
+	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
 	os.MkdirAll(dataDir, 0755)
 
 	// Create a map for all available replacements
@@ -382,11 +382,11 @@ cd "/home/container"
 	// Normalize line endings for Linux
 	startScript = strings.ReplaceAll(startScript, "\r\n", "\n")
 
-	os.WriteFile(fmt.Sprintf("%s\\start.sh", dataDir), []byte(startScript), 0755)
+	os.WriteFile(filepath.Join(dataDir, "start.sh"), []byte(startScript), 0755)
 }
 
 func writeInstallScript(uuid string, installScript string, environment string) {
-	dataDir := fmt.Sprintf("C:\\AtlasData\\%s", uuid)
+	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
 
 	// Replace placeholders in install script too
 	if environment != "" {
@@ -401,7 +401,7 @@ func writeInstallScript(uuid string, installScript string, environment string) {
 	// Normalize line endings for Linux
 	installScript = strings.ReplaceAll(installScript, "\r\n", "\n")
 
-	os.WriteFile(fmt.Sprintf("%s\\install.sh", dataDir), []byte(installScript), 0755)
+	os.WriteFile(filepath.Join(dataDir, "install.sh"), []byte(installScript), 0755)
 }
 
 type PowerActionRequest struct {
@@ -656,7 +656,7 @@ func DeleteServer(c *gin.Context) {
 	}
 
 	// 2. Remove data directory
-	dataDir := fmt.Sprintf("C:\\AtlasData\\%s", uuid)
+	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
 	if err := os.RemoveAll(dataDir); err != nil {
 		log.Printf("[Daemon] Error cleaning up directory %s: %v", dataDir, err)
 	}

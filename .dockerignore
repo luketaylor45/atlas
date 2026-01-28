@@ -1,10 +1,16 @@
 .git
 .gitignore
 .vscode
-node_modules
-dist
 .env
 README.md
 install.sh
 *.txt
 *.exe
+
+# Sub-folder exclusions (for context protection)
+**/node_modules
+**/dist
+**/vendor
+**/atlas-core
+**/atlas-seed
+**/atlas-daemon

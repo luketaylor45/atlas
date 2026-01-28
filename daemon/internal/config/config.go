@@ -11,6 +11,7 @@ type Config struct {
 	CoreURL   string `mapstructure:"CORE_URL"`
 	NodeToken string `mapstructure:"NODE_TOKEN"`
 	SFTPPort  string `mapstructure:"SFTP_PORT"`
+	DataPath  string `mapstructure:"DATA_PATH"`
 }
 
 var NodeConfig Config
@@ -20,6 +21,7 @@ func LoadConfig() {
 	viper.SetDefault("CORE_URL", "http://localhost:8080")
 	viper.SetDefault("NODE_TOKEN", "change-me")
 	viper.SetDefault("SFTP_PORT", "2022")
+	viper.SetDefault("DATA_PATH", "/var/lib/atlas/data")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("env")

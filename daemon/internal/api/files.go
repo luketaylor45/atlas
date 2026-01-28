@@ -19,9 +19,8 @@ type FileInfo struct {
 	Mime  string `json:"mime"`
 }
 
-// securePath ensures the requested path is within the server's data directory
 func securePath(uuid string, subPath string) (string, error) {
-	dataDir := fmt.Sprintf("C:\\AtlasData\\%s", uuid)
+	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
 
 	// Clean the subPath to prevent traversal (.. stuff)
 	cleanPath := filepath.Join("/", subPath)

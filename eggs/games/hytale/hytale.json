@@ -1,0 +1,55 @@
+{
+    "uuid": "atlas-hytale",
+    "name": "Hytale",
+    "description": "Adventure and creativity RPG sandbox.",
+    "docker_images": [
+        "ghcr.io/pterodactyl/games:hytale"
+    ],
+    "startup_command": "java $( [ \"$USE_AOT_CACHE\" == \"1\" ] && printf %s \"-XX:AOTCache=Server/HytaleServer.aot\" ) -Xms128M -Xmx{{SERVER_MEMORY}}M -jar Server/HytaleServer.jar $( [ \"$HYTALE_ALLOW_OP\" == \"1\" ] && printf %s \"--allow-op\" ) $( [ \"$HYTALE_ACCEPT_EARLY_PLUGINS\" == \"1\" ] && printf %s \"--accept-early-plugins\" ) $( [ \"$DISABLE_SENTRY\" == \"1\" ] && printf %s \"--disable-sentry\" ) --auth-mode {{HYTALE_AUTH_MODE}} --assets Assets.zip --bind 0.0.0.0:{{SERVER_PORT}}",
+    "stop_command": "/stop",
+    "script_install": "#!/bin/ash\nset -e\nmkdir -p /mnt/server\ncd /mnt/server\n\necho \"[Atlas] Downloading Hytale Downloader...\"\nDOWNLOAD_URL=\"https://downloader.hytale.com/hytale-downloader.zip\"\n\nrm -f hytale-downloader.zip\ncurl -o hytale-downloader.zip $DOWNLOAD_URL\nunzip -o hytale-downloader.zip -d hytale-downloader\nmv hytale-downloader/hytale-downloader-linux-amd64 hytale-downloader/hytale-downloader-linux\n\n# Permissions are required here for the downloader to run\nchmod 555 hytale-downloader/hytale-downloader-linux\n\necho \"[Atlas] Verifying Downloader...\"\n./hytale-downloader/hytale-downloader-linux -version\n",
+    "script_container": "ghcr.io/pterodactyl/installers:alpine",
+    "script_entry": "ash",
+    "variables": [
+        {
+            "name": "Auth Mode",
+            "env_variable": "HYTALE_AUTH_MODE",
+            "default_value": "authenticated"
+        },
+        {
+            "name": "Patchline",
+            "env_variable": "HYTALE_PATCHLINE",
+            "default_value": "release"
+        },
+        {
+            "name": "Accept Early Plugins",
+            "env_variable": "HYTALE_ACCEPT_EARLY_PLUGINS",
+            "default_value": "0"
+        },
+        {
+            "name": "Disable Sentry",
+            "env_variable": "DISABLE_SENTRY",
+            "default_value": "0"
+        },
+        {
+            "name": "Use AOT Cache",
+            "env_variable": "USE_AOT_CACHE",
+            "default_value": "1"
+        },
+        {
+            "name": "Allow Operators",
+            "env_variable": "HYTALE_ALLOW_OP",
+            "default_value": "0"
+        },
+        {
+            "name": "Install Source Query",
+            "env_variable": "INSTALL_SOURCEQUERY_PLUGIN",
+            "default_value": "1"
+        },
+        {
+            "name": "Query Port",
+            "env_variable": "QUERY_PORT",
+            "default_value": ""
+        }
+    ]
+}
