@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -469,11 +470,22 @@ func HandleConsole(c *gin.Context) {
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
+		log.Printf("[Daemon] WebSocket upgrade failed for %s: %v", uuid, err)
 		return
 	}
 	defer conn.Close()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. Inspect container to see if it has TTY enabled
+	inspect, err := docker.Client.ContainerInspect(ctx, uuid)
+	if err != nil {
+		log.Printf("[Daemon] Failed to inspect container %s: %v", uuid, err)
+		conn.WriteMessage(websocket.TextMessage, []byte("[Atlas] Error: Container not found or inaccessible."))
+		return
+	}
+
 	options := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -484,6 +496,7 @@ func HandleConsole(c *gin.Context) {
 
 	reader, err := docker.Client.ContainerLogs(ctx, uuid, options)
 	if err != nil {
+		log.Printf("[Daemon] Failed to get logs for %s: %v", uuid, err)
 		return
 	}
 	defer reader.Close()
@@ -492,62 +505,74 @@ func HandleConsole(c *gin.Context) {
 	go func() {
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
+				cancel() // Stop the log reader if the websocket is closed
 				reader.Close()
 				break
 			}
 		}
 	}()
 
-	// Use a scanner to read line by line properly
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := scanner.Text()
+	// Use a more robust way to read logs.
+	// If TTY is enabled, logs are raw. If not, they are multiplexed with an 8-byte header.
+	if inspect.Config.Tty {
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Docker timestamps: 2024-03-21T12:00:00.123456789Z message
+			// We keep the line as is, the frontend handles stripping if needed, but we do basic trimming.
+			line = strings.TrimRight(line, "\r\n")
 
-		// Docker logs often have trailing \r on Windows or just extra space
-		line = strings.TrimRight(line, "\r\n ")
-		if line == "" {
-			continue
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(line)); err != nil {
+				return
+			}
 		}
-
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(line)); err != nil {
-			return
+		if err := scanner.Err(); err != nil {
+			log.Printf("[Daemon] Console scanner error for %s (TTY): %v", uuid, err)
 		}
-	}
+	} else {
+		// Non-TTY: Use stdcopy to demultiplex the stream
+		// We use a pipe to convert the demultiplexed stream back into lines
+		pr, pw := io.Pipe()
+		go func() {
+			_, err := stdcopy.StdCopy(pw, pw, reader)
+			pw.CloseWithError(err)
+		}()
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("[Daemon] Console scanner error for %s: %v", uuid, err)
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			line = strings.TrimRight(line, "\r\n")
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(line)); err != nil {
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("[Daemon] Console scanner error for %s (Non-TTY): %v", uuid, err)
+		}
 	}
 }
 
 func HandleStats(c *gin.Context) {
 	uuid := c.Param("uuid")
-	// Increased timeout to 10s to account for slow Docker pipes on Windows
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 1. Get stats once. Docker's API returns current and previous samples (precpu_stats).
+	// 1. Get stats once.
 	s, err := docker.Client.ContainerStats(ctx, uuid, false)
 	if err != nil {
-		if err == context.DeadlineExceeded {
-			log.Printf("[Daemon] Stats timeout for %s - returning zeroed metrics", uuid)
-			c.JSON(http.StatusOK, gin.H{
-				"cpu":     "0.0",
-				"memory":  0,
-				"network": gin.H{"rx": 0, "tx": 0},
-			})
-			return
-		}
 		log.Printf("[Daemon] Error fetching stats for %s: %v", uuid, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer s.Body.Close()
 
-	// We define a local struct to precisely match the Docker JSON without SDK version conflicts
+	// Use a local struct to decode the stats JSON. This is more reliable than relying on
+	// specific versions of the Docker SDK types.
 	var stats struct {
 		CPUStats struct {
 			CPUUsage struct {
-				TotalUsage uint64 `json:"total_usage"`
+				TotalUsage  uint64   `json:"total_usage"`
+				PercpuUsage []uint64 `json:"percpu_usage"`
 			} `json:"cpu_usage"`
 			SystemUsage uint64 `json:"system_cpu_usage"`
 			OnlineCPUs  uint64 `json:"online_cpus"`
@@ -559,10 +584,8 @@ func HandleStats(c *gin.Context) {
 			SystemUsage uint64 `json:"system_cpu_usage"`
 		} `json:"precpu_stats"`
 		MemoryStats struct {
-			Usage uint64 `json:"usage"`
-			Stats struct {
-				Cache uint64 `json:"cache"`
-			} `json:"stats"`
+			Usage uint64            `json:"usage"`
+			Stats map[string]uint64 `json:"stats"`
 		} `json:"memory_stats"`
 		Networks map[string]struct {
 			RxBytes uint64 `json:"rx_bytes"`
@@ -576,7 +599,7 @@ func HandleStats(c *gin.Context) {
 		return
 	}
 
-	// Calculate CPU % using Pterodactyl / Docker Dashboard logic
+	// Calculate CPU %
 	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage) - float64(stats.PreCPUStats.CPUUsage.TotalUsage)
 	systemDelta := float64(stats.CPUStats.SystemUsage) - float64(stats.PreCPUStats.SystemUsage)
 
@@ -584,14 +607,23 @@ func HandleStats(c *gin.Context) {
 	if systemDelta > 0.0 && cpuDelta > 0.0 {
 		cpus := float64(stats.CPUStats.OnlineCPUs)
 		if cpus == 0 {
-			cpus = 1
+			cpus = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
+			if cpus == 0 {
+				cpus = 1
+			}
 		}
-		// Multiply by core count to match physical core utilization
 		cpuPercent = (cpuDelta / systemDelta) * cpus * 100.0
 	}
 
-	// Calculate Memory (Subtracting cache provides the "real" usage as expected by power users)
-	realMemory := stats.MemoryStats.Usage - stats.MemoryStats.Stats.Cache
+	// Calculate Memory
+	// usage - cache is the standard way to show "real" memory usage
+	realMemory := stats.MemoryStats.Usage
+	if cache, ok := stats.MemoryStats.Stats["cache"]; ok {
+		realMemory -= cache
+	} else if inactive, ok := stats.MemoryStats.Stats["total_inactive_file"]; ok {
+		realMemory -= inactive
+	}
+
 	memoryMB := realMemory / 1024 / 1024
 
 	// Calculate Network

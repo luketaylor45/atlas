@@ -71,15 +71,23 @@ export default function ServiceConsolePage() {
         const connect = () => {
             if (isStopped) return;
 
-            const nodeAddr = service.node.address === 'localhost' || service.node.address === '127.0.0.1'
-                ? `${window.location.hostname}:8081`
-                : `${service.node.address}:${service.node.port}`;
+            const isLocal = ['localhost', '127.0.0.1', 'atlas_daemon'].includes(service.node.address);
+            const useProxy = window.location.protocol === 'https:';
 
-            // Use wss:// if the page is loaded over HTTPS, otherwise use ws://
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            let wsUrl = '';
+            if (useProxy && (isLocal || service.node.address === window.location.hostname)) {
+                // Remove the port to use the Nginx proxy on port 443
+                wsUrl = `wss://${window.location.hostname}/api/servers/${uuid}/console`;
+            } else {
+                const nodeAddr = isLocal
+                    ? `${window.location.hostname}:${service.node.port || '8081'}`
+                    : `${service.node.address}:${service.node.port || '8081'}`;
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                wsUrl = `${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`;
+            }
 
-            console.log(`[Atlas] Connecting to console: ${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`);
-            const ws = new WebSocket(`${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`);
+            console.log(`[Atlas] Connecting to console: ${wsUrl}`);
+            const ws = new WebSocket(wsUrl);
             wsRef.current = ws;
 
             ws.onmessage = (event) => {
@@ -116,7 +124,7 @@ export default function ServiceConsolePage() {
             };
 
             ws.onerror = (err) => {
-                console.error("[Atlas] Console WS error", err);
+                console.error("[Atlas] Console WebSocket Error. Check if the Node address is reachable and if SSL matches the Panel protocol.", err);
                 ws.close();
             };
         };
@@ -141,15 +149,23 @@ export default function ServiceConsolePage() {
         }
 
         const fetchStats = async () => {
-            // Use https:// if page is loaded over HTTPS, otherwise use http://
-            const httpProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
+            const isLocal = ['localhost', '127.0.0.1', 'atlas_daemon'].includes(service.node?.address);
+            const useProxy = window.location.protocol === 'https:';
 
-            const nodeAddr = service.node?.address === 'localhost' || service.node?.address === '127.0.0.1'
-                ? `${httpProtocol}://${window.location.hostname}:8081`
-                : `${httpProtocol}://${service.node?.address}:${service.node?.port}`;
+            let statsUrl = '';
+            if (useProxy && (isLocal || service.node?.address === window.location.hostname)) {
+                // Use the relative path to hit the Nginx proxy
+                statsUrl = `/api/servers/${uuid}/stats`;
+            } else {
+                const httpProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
+                const nodeAddr = isLocal
+                    ? `${httpProtocol}://${window.location.hostname}:${service.node?.port || '8081'}`
+                    : `${httpProtocol}://${service.node?.address}:${service.node?.port || '8081'}`;
+                statsUrl = `${nodeAddr}/api/servers/${uuid}/stats`;
+            }
 
             try {
-                const res = await fetch(`${nodeAddr}/api/servers/${uuid}/stats`);
+                const res = await fetch(statsUrl);
                 if (res.ok) {
                     const data = await res.json();
                     setStats({

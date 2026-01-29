@@ -49,6 +49,9 @@ func MonitorEvents() {
 			}
 
 			uuid := msg.Actor.Attributes["name"]
+			// Docker container names often have a leading slash
+			uuid = strings.TrimPrefix(uuid, "/")
+
 			if uuid == "" {
 				uuid = msg.Actor.ID
 			}

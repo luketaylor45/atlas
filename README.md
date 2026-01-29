@@ -1,6 +1,6 @@
 # Atlas Game Server Platform
 
-Atlas is a next-generation game server hosting panel designed for performance, modularity, and security.
+Atlas is a game server hosting panel designed for performance, modularity, and security.
 
 ## 🚀 Key Features
 *   **Infrastructure as Code**: Manage game templates ("Eggs") as JSON files.
@@ -79,25 +79,6 @@ server {
     }
 }
 ```
-
-## 🆘 Common Issues & Fixes
-
-### Server crashes during `go build`
-If your server turns off or resets during installation, it is likely running out of RAM (Out of Memory). We have limited the build to a single CPU core, but you should also **add a Swap file** to your Ubuntu server to handle the build load:
-
-```bash
-# Create a 2GB swap file
-sudo fallocate -l 2G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-# Make it permanent
-echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-```
-
-### Port 80/3000 already in use
-Check if another service (like default Nginx) is running and stop it:
-`sudo systemctl stop apache2; sudo systemctl stop nginx`
 
 ## 📄 License
 MIT License
