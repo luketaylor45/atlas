@@ -37,7 +37,7 @@ func ValidateSFTPCredentials(c *gin.Context) {
 
 	// Find user by username
 	var user models.User
-	if err := database.DB.Where("username = ?", actualUsername).First(&user).Error; err != nil {
+	if err := database.DB.Where("LOWER(username) = LOWER(?)", actualUsername).First(&user).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"valid": false})
 		return
 	}

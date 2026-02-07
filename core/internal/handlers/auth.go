@@ -28,7 +28,7 @@ func Login(c *gin.Context) {
 	}
 
 	var user models.User
-	if err := database.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
+	if err := database.DB.Where("LOWER(username) = LOWER(?)", req.Username).First(&user).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
@@ -62,7 +62,7 @@ func Register(c *gin.Context) {
 
 	// Check if username is taken
 	var existing models.User
-	if err := database.DB.Where("username = ?", req.Username).First(&existing).Error; err == nil {
+	if err := database.DB.Where("LOWER(username) = LOWER(?)", req.Username).First(&existing).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Username is already taken"})
 		return
 	}

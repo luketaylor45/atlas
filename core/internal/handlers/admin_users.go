@@ -32,6 +32,13 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
+	// Check if username is taken
+	var existing models.User
+	if err := database.DB.Where("LOWER(username) = LOWER(?)", req.Username).First(&existing).Error; err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Username is already taken"})
+		return
+	}
+
 	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -74,6 +81,12 @@ func UpdateUser(c *gin.Context) {
 	}
 
 	if req.Username != "" {
+		// Check if username is taken by another user
+		var existing models.User
+		if err := database.DB.Where("LOWER(username) = LOWER(?) AND id != ?", req.Username, user.ID).First(&existing).Error; err == nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "Username is already taken"})
+			return
+		}
 		user.Username = req.Username
 	}
 	if req.Password != "" {

@@ -52,7 +52,7 @@ func main() {
 		username = strings.TrimSpace(username)
 
 		var user models.User
-		if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		if err := database.DB.Where("LOWER(username) = LOWER(?)", username).First(&user).Error; err != nil {
 			log.Fatalf("User not found: %s", username)
 		}
 
