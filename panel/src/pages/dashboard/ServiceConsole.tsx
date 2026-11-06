@@ -68,7 +68,18 @@ export default function ServiceConsolePage() {
         let reconnectTimer: any;
         let isStopped = false;
 
-        const connect = () => {
+        const connect = async () => {
+            if (isStopped) return;
+
+            let ticket = '';
+            try {
+                const t = await api.get(`/services/${uuid}/console-ticket`);
+                ticket = t.data.ticket;
+            } catch (err) {
+                console.error("[Atlas] Failed to get console ticket", err);
+                if (!isStopped) reconnectTimer = setTimeout(connect, 5000);
+                return;
+            }
             if (isStopped) return;
 
             const isLocal = ['localhost', '127.0.0.1', 'atlas_daemon'].includes(service.node.address);
@@ -77,16 +88,16 @@ export default function ServiceConsolePage() {
             let wsUrl = '';
             if (useProxy && (isLocal || service.node.address === window.location.hostname)) {
                 // Remove the port to use the Nginx proxy on port 443
-                wsUrl = `wss://${window.location.hostname}/api/servers/${uuid}/console`;
+                wsUrl = `wss://${window.location.hostname}/api/servers/${uuid}/console?ticket=${encodeURIComponent(ticket)}`;
             } else {
                 const nodeAddr = isLocal
                     ? `${window.location.hostname}:${service.node.port || '8081'}`
                     : `${service.node.address}:${service.node.port || '8081'}`;
                 const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-                wsUrl = `${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`;
+                wsUrl = `${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console?ticket=${encodeURIComponent(ticket)}`;
             }
 
-            console.log(`[Atlas] Connecting to console: ${wsUrl}`);
+            console.log('[Atlas] Connecting to console...');
             const ws = new WebSocket(wsUrl);
             wsRef.current = ws;
 
@@ -148,6 +159,14 @@ export default function ServiceConsolePage() {
             return;
         }
 
+        let cached: { ticket: string; exp: number } | null = null;
+        const getTicket = async () => {
+            if (cached && cached.exp * 1000 - Date.now() > 30000) return cached.ticket;
+            const t = await api.get(`/services/${uuid}/console-ticket`);
+            cached = { ticket: t.data.ticket, exp: t.data.expires_at };
+            return cached.ticket;
+        };
+
         const fetchStats = async () => {
             const isLocal = ['localhost', '127.0.0.1', 'atlas_daemon'].includes(service.node?.address);
             const useProxy = window.location.protocol === 'https:';
@@ -165,7 +184,8 @@ export default function ServiceConsolePage() {
             }
 
             try {
-                const res = await fetch(statsUrl);
+                const ticket = await getTicket();
+                const res = await fetch(`${statsUrl}?ticket=${encodeURIComponent(ticket)}`);
                 if (res.ok) {
                     const data = await res.json();
                     setStats({

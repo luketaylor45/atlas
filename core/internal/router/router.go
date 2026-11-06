@@ -79,6 +79,7 @@ func Setup(r *gin.Engine) {
 			services.GET("/:uuid", handlers.GetServiceDetails)
 			services.POST("/:uuid/power", handlers.ServicePowerAction)
 			services.POST("/:uuid/command", handlers.ServiceSendCommand)
+			services.GET("/:uuid/console-ticket", handlers.GetConsoleTicket)
 			services.POST("/:uuid/reinstall", handlers.ServiceReinstall)
 			services.POST("/:uuid/environment", handlers.UpdateServiceEnvironment)
 

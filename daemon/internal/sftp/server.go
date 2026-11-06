@@ -2,6 +2,7 @@ package sftp
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -75,7 +76,7 @@ func (s *SFTPServer) Start() error {
 			}
 
 			// Fallback: Legacy format service_<UUID> with node token
-			if strings.HasPrefix(username, "service_") && password == config.NodeConfig.NodeToken {
+			if strings.HasPrefix(username, "service_") && subtle.ConstantTimeCompare([]byte(password), []byte(config.NodeConfig.NodeToken)) == 1 {
 				uuid := strings.TrimPrefix(username, "service_")
 				serviceDir := filepath.Join(s.DataDir, uuid)
 				if _, err := os.Stat(serviceDir); os.IsNotExist(err) {

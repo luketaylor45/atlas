@@ -44,13 +44,6 @@ type CreateServerRequest struct {
 }
 
 func CreateServer(c *gin.Context) {
-	// 1. Auth Check (Simple Token Check)
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid Token"})
-		return
-	}
-
 	var req CreateServerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -220,12 +213,6 @@ type UpdateServerRequest struct {
 }
 
 func UpdateServer(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	var req UpdateServerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -414,12 +401,6 @@ type PowerActionRequest struct {
 }
 
 func HandlePowerAction(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	var req PowerActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -667,12 +648,6 @@ func HandleSendCommand(c *gin.Context) {
 }
 
 func DeleteServer(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid Token"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	ctx := context.Background()
 

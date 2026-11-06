@@ -57,7 +57,7 @@ services:
     environment:
       - PORT=8081
       - CORE_URL=http://core:8080
-      - NODE_TOKEN=${NODE_TOKEN:-change-me}
+      - NODE_TOKEN=${NODE_TOKEN:-}
       - SFTP_PORT=2022
       - DATA_PATH=/var/lib/atlas/data
     volumes:

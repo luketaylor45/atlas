@@ -35,12 +35,6 @@ func securePath(uuid string, subPath string) (string, error) {
 }
 
 func ListFiles(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	subPath := c.Query("path")
 
@@ -79,12 +73,6 @@ func ListFiles(c *gin.Context) {
 }
 
 func GetFileContent(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	subPath := c.Query("path")
 
@@ -104,12 +92,6 @@ func GetFileContent(c *gin.Context) {
 }
 
 func WriteFile(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	var req struct {
 		Path    string `json:"path"`
@@ -144,12 +126,6 @@ func WriteFile(c *gin.Context) {
 }
 
 func DeleteFile(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	subPath := c.Query("path")
 
@@ -173,12 +149,6 @@ func DeleteFile(c *gin.Context) {
 }
 
 func CreateFolder(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	var req struct {
 		Path string `json:"path"`
@@ -204,12 +174,6 @@ func CreateFolder(c *gin.Context) {
 }
 
 func UploadFile(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
 	uuid := c.Param("uuid")
 	subPath := c.Query("path")
 

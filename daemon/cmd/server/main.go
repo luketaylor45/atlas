@@ -15,6 +15,9 @@ import (
 func main() {
 	log.Println("[DEBUG] Loading configuration...")
 	config.LoadConfig()
+	if err := config.ValidateNodeToken(); err != nil {
+		log.Printf("[WARN] %v. All authenticated routes will reject requests until a real token is configured.", err)
+	}
 
 	log.Println("[DEBUG] Initializing Docker client...")
 	docker.Init()
@@ -54,23 +57,27 @@ func main() {
 		})
 	})
 
-	// Secure Routes
-	r.POST("/api/servers", api.CreateServer)
-	r.POST("/api/servers/:uuid/power", api.HandlePowerAction)
-	r.GET("/api/servers/:uuid/console", api.HandleConsole)
-	r.GET("/api/servers/:uuid/stats", api.HandleStats)
-	r.POST("/api/servers/:uuid/command", api.HandleSendCommand)
-	r.POST("/api/servers/:uuid/reinstall", api.HandleReinstall)
-	r.PUT("/api/servers/:uuid", api.UpdateServer)
-	r.DELETE("/api/servers/:uuid", api.DeleteServer)
+	// Browser-facing routes: node token OR short-lived per-server ticket issued by the Core.
+	browser := r.Group("/api/servers/:uuid", api.NodeOrTicketAuth())
+	browser.GET("/console", api.HandleConsole)
+	browser.GET("/stats", api.HandleStats)
+
+	// Core-only routes: node token required.
+	secure := r.Group("/api/servers", api.NodeAuth())
+	secure.POST("", api.CreateServer)
+	secure.POST("/:uuid/power", api.HandlePowerAction)
+	secure.POST("/:uuid/command", api.HandleSendCommand)
+	secure.POST("/:uuid/reinstall", api.HandleReinstall)
+	secure.PUT("/:uuid", api.UpdateServer)
+	secure.DELETE("/:uuid", api.DeleteServer)
 
 	// File Management
-	r.GET("/api/servers/:uuid/files/list", api.ListFiles)
-	r.GET("/api/servers/:uuid/files/content", api.GetFileContent)
-	r.POST("/api/servers/:uuid/files/write", api.WriteFile)
-	r.POST("/api/servers/:uuid/files/create-folder", api.CreateFolder)
-	r.POST("/api/servers/:uuid/files/upload", api.UploadFile)
-	r.DELETE("/api/servers/:uuid/files", api.DeleteFile)
+	secure.GET("/:uuid/files/list", api.ListFiles)
+	secure.GET("/:uuid/files/content", api.GetFileContent)
+	secure.POST("/:uuid/files/write", api.WriteFile)
+	secure.POST("/:uuid/files/create-folder", api.CreateFolder)
+	secure.POST("/:uuid/files/upload", api.UploadFile)
+	secure.DELETE("/:uuid/files", api.DeleteFile)
 
 	log.Printf("Daemon listening on port %s", config.NodeConfig.Port)
 	if err := r.Run(":" + config.NodeConfig.Port); err != nil {
