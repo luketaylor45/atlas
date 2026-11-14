@@ -12,25 +12,32 @@ import (
 func Setup(r *gin.Engine) {
 	// CORS Setup
 	r.Use(cors.New(cors.Config{
-		AllowAllOrigins:  true,
+		AllowAllOrigins: true,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
+		// Sessions use a bearer header, never cookies, so credentials are not allowed cross-origin.
+		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
 	}))
 
 	api := r.Group("/api/v1")
 	{
+		// Credential endpoints are limited per client address to slow down
+		// password guessing.
+		credentialLimit := middleware.NewRateLimiter(10, 5*time.Minute).Middleware()
+
 		auth := api.Group("/auth")
 		{
-			auth.POST("/login", handlers.Login)
-			auth.POST("/register", handlers.Register)
-			auth.POST("/setup", handlers.InitialSetup)
+			auth.POST("/login", credentialLimit, handlers.Login)
+			auth.POST("/register", credentialLimit, handlers.Register)
+			auth.POST("/setup", credentialLimit, handlers.InitialSetup)
 			auth.GET("/setup-status", handlers.GetSetupStatus)
 		}
 
+		// Daemon-facing routes: every one requires a valid node token.
 		internal := api.Group("/internal")
+		internal.Use(middleware.NodeAuthMiddleware())
 		{
 			internal.POST("/heartbeat", handlers.HandleHeartbeat)
 			internal.POST("/services/:uuid/status", handlers.HandleServerStatusUpdate)
@@ -70,6 +77,10 @@ func Setup(r *gin.Engine) {
 			admin.DELETE("/news/:id", handlers.DeleteNews)
 		}
 
+		// The console websocket authenticates with a single-use style ticket
+		// instead of the session header, which browsers cannot send on a socket.
+		api.GET("/services/:uuid/console/ws", handlers.ServiceConsoleSocket)
+
 		// User Service Routes
 		services := api.Group("/services")
 		services.Use(middleware.AuthMiddleware())
@@ -81,6 +92,8 @@ func Setup(r *gin.Engine) {
 			services.POST("/:uuid/command", handlers.ServiceSendCommand)
 			services.POST("/:uuid/reinstall", handlers.ServiceReinstall)
 			services.POST("/:uuid/environment", handlers.UpdateServiceEnvironment)
+			services.POST("/:uuid/console/ticket", handlers.CreateConsoleTicket)
+			services.GET("/:uuid/stats", handlers.ServiceStats)
 
 			// File Management
 			services.GET("/:uuid/files/list", handlers.ServiceListFiles)

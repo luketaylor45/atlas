@@ -50,15 +50,13 @@ type CreateServerRequest struct {
 }
 
 func CreateServer(c *gin.Context) {
-	token := c.GetHeader("X-Node-Token")
-	if token != config.NodeConfig.NodeToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid Token"})
-		return
-	}
-
 	var req CreateServerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !serverfs.IsServiceDirectoryName(req.UUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid service identifier"})
 		return
 	}
 
@@ -121,7 +119,7 @@ func provisionServer(ctx context.Context, req CreateServerRequest) error {
 	}
 
 	NotifyInstallationProgress(req.UUID, "Creating game server container", 98)
-	if err := writeStartScript(req.UUID, req.StartupCommand, req.Port, req.Memory, req.Environment, config.NodeConfig.NodeToken); err != nil {
+	if err := writeStartScript(req.UUID, req.StartupCommand, req.Port, req.Memory, req.Environment); err != nil {
 		return err
 	}
 
@@ -149,8 +147,6 @@ func provisionServer(ctx context.Context, req CreateServerRequest) error {
 		fmt.Sprintf("SERVER_MEMORY=%d", req.Memory),
 		fmt.Sprintf("SERVER_PORT=%d", req.Port),
 		"SERVER_UUID=" + req.UUID,
-		"CORE_URL=" + resolveContainerCoreURL(),
-		"NODE_TOKEN=" + config.NodeConfig.NodeToken,
 	}
 	containerEnvironment = append(containerEnvironment, environment...)
 
@@ -205,13 +201,6 @@ func parseEnvironment(environment string) ([]string, error) {
 	return result, nil
 }
 
-func resolveContainerCoreURL() string {
-	coreURL := config.NodeConfig.CoreURL
-	coreURL = strings.Replace(coreURL, "localhost", "host.docker.internal", 1)
-	coreURL = strings.Replace(coreURL, "127.0.0.1", "host.docker.internal", 1)
-	return coreURL
-}
-
 type UpdateServerRequest struct {
 	Memory         uint64 `json:"memory"`
 	Disk           uint64 `json:"disk"`
@@ -251,7 +240,7 @@ func UpdateServer(c *gin.Context) {
 	}
 
 	// 2. Regenerate Start Script
-	if err := writeStartScript(uuid, req.StartupCommand, req.Port, int64(req.Memory), req.Environment, config.NodeConfig.NodeToken); err != nil {
+	if err := writeStartScript(uuid, req.StartupCommand, req.Port, int64(req.Memory), req.Environment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -363,7 +352,7 @@ func HandleReinstall(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"status": "reinstall_triggered"})
 }
 
-func writeStartScript(uuid string, startupCmd string, port int, memory int64, environment string, nodeToken string) error {
+func writeStartScript(uuid string, startupCmd string, port int, memory int64, environment string) error {
 	dataDir := serverfs.LocalServicePath(uuid)
 	if err := serverfs.EnsureDirectory(dataDir); err != nil {
 		return fmt.Errorf("prepare startup script directory: %w", err)
@@ -400,13 +389,12 @@ func writeStartScript(uuid string, startupCmd string, port int, memory int64, en
 	log.Printf("[Daemon] Processed Startup Command for %s: %s", uuid, processedCmd)
 
 	// Generate the actual start.sh content
+	// The game container never receives node credentials: the daemon reports
+	// status itself from Docker events.
 	startScript := fmt.Sprintf(`#!/bin/bash
 echo "--- Atlas Instance Wrapper ---"
 echo "Working Directory: $(pwd)"
 echo "Environment: Port=%d, Memory=%dMB"
-
-# Notify Running
-curl -X POST "${CORE_URL}/api/v1/internal/services/${SERVER_UUID}/status" -H "Content-Type: application/json" -d "{\"status\":\"running\", \"token\": \"${NODE_TOKEN}\"}" > /dev/null 2>&1
 
 echo "Starting Server..."
 # Anchor CWD to game root
@@ -416,11 +404,8 @@ cd "/home/container"
 %s
 exit_code=$?
 
-if [ $exit_code -eq 0 ]; then
-  curl -X POST "${CORE_URL}/api/v1/internal/services/${SERVER_UUID}/status" -H "Content-Type: application/json" -d "{\"status\":\"offline\", \"token\": \"${NODE_TOKEN}\"}" > /dev/null 2>&1
-else
+if [ $exit_code -ne 0 ]; then
   echo "[Atlas] Server process exited unexpectedly with code $exit_code"
-  curl -X POST "${CORE_URL}/api/v1/internal/services/${SERVER_UUID}/status" -H "Content-Type: application/json" -d "{\"status\":\"offline\", \"token\": \"${NODE_TOKEN}\"}" > /dev/null 2>&1
 fi
 
 exit $exit_code
@@ -552,7 +537,7 @@ func HandlePowerAction(c *gin.Context) {
 	// Re-write start script if we have the data
 	if req.StartupCommand != "" {
 		log.Printf("[Daemon] Regenerating start.sh for %s", uuid)
-		if err := writeStartScript(uuid, req.StartupCommand, req.Port, req.Memory, req.Environment, config.NodeConfig.NodeToken); err != nil {
+		if err := writeStartScript(uuid, req.StartupCommand, req.Port, req.Memory, req.Environment); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

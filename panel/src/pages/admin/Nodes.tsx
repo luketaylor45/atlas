@@ -9,6 +9,7 @@ interface Node {
     id: number;
     name: string;
     address: string;
+    internal_address?: string;
     port: string;
     is_online: boolean;
     location?: string;
@@ -197,6 +198,16 @@ export default function NodesPage() {
                                         placeholder="e.g. London, UK"
                                     />
                                 </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Internal Address (optional)</label>
+                                <input
+                                    className="input-field"
+                                    placeholder="daemon"
+                                    value={editingNode.internal_address || ''}
+                                    onChange={e => setEditingNode({ ...editingNode, internal_address: e.target.value })}
+                                />
+                                <p className="text-xs text-muted pl-1">How the panel reaches this node&apos;s daemon. Use &quot;daemon&quot; for the node in the same Docker Compose stack; leave empty to use the public address.</p>
                             </div>
                             <div className="grid grid-cols-2 gap-6">
                                 <div className="space-y-2">

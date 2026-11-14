@@ -97,7 +97,7 @@ func RepairExistingServices(dataRoot string) error {
 
 	var repairErrors []error
 	for _, entry := range entries {
-		if !entry.IsDir() || !isServiceDirectoryName(entry.Name()) {
+		if !entry.IsDir() || !IsServiceDirectoryName(entry.Name()) {
 			continue
 		}
 		serviceRoot := filepath.Join(dataRoot, entry.Name())
@@ -108,7 +108,7 @@ func RepairExistingServices(dataRoot string) error {
 	return errors.Join(repairErrors...)
 }
 
-func isServiceDirectoryName(name string) bool {
+func IsServiceDirectoryName(name string) bool {
 	if len(name) != 36 {
 		return false
 	}

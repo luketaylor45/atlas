@@ -7,18 +7,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
-	"github.com/luketaylor45/atlas/core/internal/utils"
 )
 
 // GetServiceActivityLogs returns activity logs for a service
 func GetServiceActivityLogs(c *gin.Context) {
-	userID := c.MustGet("user_id").(uint)
-	uuid := c.Param("uuid")
-
-	// Get service and verify ownership/access
-	service, _, ok := utils.FindServiceForUser(uuid, userID)
+	// Owner or admin only: the log exposes other users and their IP addresses.
+	service, ok := getServiceByUUID(c)
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
 		return
 	}
 

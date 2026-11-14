@@ -109,34 +109,42 @@ export default function ServiceConsolePage() {
         setLastStartupSaveAt(null);
     }, [uuid]);
 
-    // WebSocket Logic
+    const canViewConsole = isOwner || Boolean(permissions?.can_view_console);
+
+    // Console stream. The socket is relayed by Core and authorised with a
+    // short-lived ticket, so the browser never talks to a node directly.
     useEffect(() => {
-        if (!service?.node || activeTab !== 'console' || isContainerUnavailableStatus(service.status)) return;
+        if (!service?.uuid || !canViewConsole || activeTab !== 'console' || isContainerUnavailableStatus(service.status)) return;
 
-        let reconnectTimer: any;
+        let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
         let isStopped = false;
+        let attempt = 0;
+        const shouldReconnect = ['running', 'starting', 'stopping'].includes(service.status);
 
-        const connect = () => {
+        const scheduleReconnect = () => {
+            if (isStopped || !shouldReconnect) return;
+            attempt += 1;
+            reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 15000));
+        };
+
+        const connect = async () => {
             if (isStopped) return;
 
-            const isLocal = ['localhost', '127.0.0.1', 'atlas_daemon'].includes(service.node.address);
-            const useProxy = window.location.protocol === 'https:';
-
-            let wsUrl = '';
-            if (useProxy && (isLocal || service.node.address === window.location.hostname)) {
-                // Remove the port to use the Nginx proxy on port 443
-                wsUrl = `wss://${window.location.hostname}/api/servers/${uuid}/console`;
-            } else {
-                const nodeAddr = isLocal
-                    ? `${window.location.hostname}:${service.node.port || '8081'}`
-                    : `${service.node.address}:${service.node.port || '8081'}`;
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-                wsUrl = `${wsProtocol}://${nodeAddr}/api/servers/${uuid}/console`;
+            let ticket = '';
+            try {
+                const res = await api.post(`/services/${uuid}/console/ticket`);
+                ticket = res.data.ticket;
+            } catch {
+                scheduleReconnect();
+                return;
             }
+            if (isStopped) return;
 
-            console.log(`[Atlas] Connecting to console: ${wsUrl}`);
-            const ws = new WebSocket(wsUrl);
+            const wsBase = String(api.defaults.baseURL || '').replace(/^http/i, 'ws');
+            const ws = new WebSocket(`${wsBase}/services/${uuid}/console/ws?ticket=${encodeURIComponent(ticket)}`);
             wsRef.current = ws;
+
+            ws.onopen = () => { attempt = 0; };
 
             ws.onmessage = (event) => {
                 const rawData = String(event.data || '');
@@ -159,8 +167,10 @@ export default function ServiceConsolePage() {
                     // Strip ANSI codes from the message
                     logMsg = stripAnsi(logMsg);
 
-                    const newLog = { id: `docker-${rawData}`, time: logTime, message: logMsg };
-                    if (prev.some(log => log.id === newLog.id)) {
+                    // A reconnect replays recent history; timestamped lines are
+                    // unique, so they are used to drop the replayed copies.
+                    const newLog = { id: tsMatch ? `docker-${rawData}` : makeLogLine('').id, time: logTime, message: logMsg };
+                    if (tsMatch && prev.some(log => log.id === newLog.id)) {
                         return prev;
                     }
                     return [...prev, newLog].slice(-500);
@@ -168,19 +178,16 @@ export default function ServiceConsolePage() {
             };
 
             ws.onclose = () => {
-                if (!isStopped && ['running', 'starting', 'stopping'].includes(service.status)) {
-                    console.log("[Atlas] Console stream disconnected. Retrying in 2s...");
-                    reconnectTimer = setTimeout(connect, 2000);
-                }
+                if (wsRef.current === ws) wsRef.current = null;
+                scheduleReconnect();
             };
 
-            ws.onerror = (err) => {
-                console.error("[Atlas] Console WebSocket Error. Check if the Node address is reachable and if SSL matches the Panel protocol.", err);
+            ws.onerror = () => {
                 ws.close();
             };
         };
 
-        connect();
+        void connect();
 
         return () => {
             isStopped = true;
@@ -190,47 +197,43 @@ export default function ServiceConsolePage() {
                 wsRef.current = null;
             }
         };
-    }, [uuid, service?.node?.address, service?.node?.port, activeTab, service?.status, wsVersion]);
+    }, [uuid, service?.uuid, canViewConsole, activeTab, service?.status, wsVersion]);
 
-    // Fetch stats polling
+    // Logs belong to one service; never carry them over to another.
     useEffect(() => {
-        if (!service || service.status !== 'running') {
-            setStats({ cpu: 0, memory: 0 });
+        setLogs([]);
+    }, [uuid]);
+
+    // Live resource usage, proxied by Core.
+    useEffect(() => {
+        if (!service || service.status !== 'running' || !canViewConsole) {
+            setStats({ cpu: 0, memory: 0, network: { rx: 0, tx: 0 } });
             return;
         }
 
+        let cancelled = false;
         const fetchStats = async () => {
-            const isLocal = ['localhost', '127.0.0.1', 'atlas_daemon'].includes(service.node?.address);
-            const useProxy = window.location.protocol === 'https:';
-
-            let statsUrl = '';
-            if (useProxy && (isLocal || service.node?.address === window.location.hostname)) {
-                // Use the relative path to hit the Nginx proxy
-                statsUrl = `/api/servers/${uuid}/stats`;
-            } else {
-                const httpProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
-                const nodeAddr = isLocal
-                    ? `${httpProtocol}://${window.location.hostname}:${service.node?.port || '8081'}`
-                    : `${httpProtocol}://${service.node?.address}:${service.node?.port || '8081'}`;
-                statsUrl = `${nodeAddr}/api/servers/${uuid}/stats`;
-            }
-
+            if (document.hidden) return;
             try {
-                const res = await fetch(statsUrl);
-                if (res.ok) {
-                    const data = await res.json();
-                    setStats({
-                        cpu: data.cpu,
-                        memory: data.memory,
-                        network: data.network || { rx: 0, tx: 0 }
-                    });
-                }
-            } catch (err) { }
+                const res = await api.get(`/services/${uuid}/stats`);
+                if (cancelled) return;
+                setStats({
+                    cpu: res.data.cpu,
+                    memory: res.data.memory,
+                    network: res.data.network || { rx: 0, tx: 0 }
+                });
+            } catch {
+                // Usage is best-effort; the next poll will try again.
+            }
         };
 
-        const interval = setInterval(fetchStats, 2000);
-        return () => clearInterval(interval);
-    }, [service?.status, uuid, service?.node?.address, service?.node?.port]);
+        void fetchStats();
+        const interval = setInterval(fetchStats, 3000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [service?.status, uuid, canViewConsole]);
 
     // Internal logs for installation or offline
     useEffect(() => {

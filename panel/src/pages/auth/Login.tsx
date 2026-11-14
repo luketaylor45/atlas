@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { isAxiosError } from 'axios';
 import { useNavigate, Link } from 'react-router-dom';
 import Logo from '../../components/Logo';
@@ -13,6 +13,22 @@ export default function LoginPage() {
     const [rememberMe, setRememberMe] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [registrationEnabled, setRegistrationEnabled] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        api.get('/auth/setup-status')
+            .then(res => {
+                if (cancelled) return;
+                if (res.data.setup_required) {
+                    navigate('/setup');
+                    return;
+                }
+                setRegistrationEnabled(Boolean(res.data.registration_enabled));
+            })
+            .catch(() => { /* the login form still works without this */ });
+        return () => { cancelled = true; };
+    }, [navigate]);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -108,9 +124,11 @@ export default function LoginPage() {
                 </form>
 
                 <div className="text-center mt-8 space-y-4">
-                    <p className="text-xs text-muted">
-                        Don't have an account? <Link to="/register" className="text-primary hover:text-primary/80 font-bold">Sign Up</Link>
-                    </p>
+                    {registrationEnabled && (
+                        <p className="text-xs text-muted">
+                            Don't have an account? <Link to="/register" className="text-primary hover:text-primary/80 font-bold">Sign Up</Link>
+                        </p>
+                    )}
                     <p className="text-xs text-muted">
                         By signing in, you agree to our <a href="#" className="underline hover:text-white">Terms of Service</a>
                     </p>

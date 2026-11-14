@@ -6,11 +6,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/database"
+	"github.com/luketaylor45/atlas/core/internal/middleware"
 	"github.com/luketaylor45/atlas/core/internal/models"
 )
 
 type HeartbeatRequest struct {
-	Token string `json:"token" binding:"required"`
 	Stats struct {
 		CPU float64 `json:"cpu"`
 		RAM float64 `json:"ram"`
@@ -18,26 +18,26 @@ type HeartbeatRequest struct {
 }
 
 func HandleHeartbeat(c *gin.Context) {
+	node := middleware.NodeFromContext(c)
+
 	var req HeartbeatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Find node by token
-	var node models.Node
-	if err := database.DB.Where("token = ?", req.Token).First(&node).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid node token"})
+	// Only the heartbeat columns are written, so a heartbeat can never
+	// overwrite an admin's concurrent edit of the node.
+	err := database.DB.Model(&models.Node{}).Where("id = ?", node.ID).Updates(map[string]interface{}{
+		"is_online":      true,
+		"last_heartbeat": time.Now(),
+		"used_cpu":       req.Stats.CPU,
+		"used_ram":       uint64(req.Stats.RAM),
+	}).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to record heartbeat"})
 		return
 	}
-
-	// Update heartbeat
-	node.IsOnline = true
-	node.LastHeartbeat = time.Now()
-	node.UsedCPU = req.Stats.CPU
-	node.UsedRAM = uint64(req.Stats.RAM)
-
-	database.DB.Save(&node)
 
 	c.JSON(http.StatusOK, gin.H{"status": "acknowledged"})
 }

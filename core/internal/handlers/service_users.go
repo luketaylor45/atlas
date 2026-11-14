@@ -9,14 +9,20 @@ import (
 	"github.com/luketaylor45/atlas/core/internal/utils"
 )
 
-// Helper to get service by UUID and verify access
+// getServiceByUUID loads a service for its owner or an admin. Sub-users are
+// refused: managing who has access, and reading the activity log of everyone
+// who does, belongs to the owner alone.
 func getServiceByUUID(c *gin.Context) (*models.Service, bool) {
 	userID := c.MustGet("user_id").(uint)
 	uuid := c.Param("uuid")
 
-	service, _, ok := utils.FindServiceForUser(uuid, userID)
+	service, subUser, ok := utils.FindServiceForUser(uuid, userID)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found or access denied"})
+		return nil, false
+	}
+	if subUser != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only the server owner can do this"})
 		return nil, false
 	}
 	return service, true

@@ -12,16 +12,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/luketaylor45/atlas/daemon/internal/config"
 	"github.com/luketaylor45/atlas/daemon/internal/serverfs"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	sftpMaxFailures   = 6
+	sftpFailureWindow = 10 * time.Minute
+	sftpBlockDuration = 30 * time.Minute
+)
+
 type SFTPServer struct {
 	Port    string
 	DataDir string
+	limiter *failureLimiter
 }
 
 type AuthValidator func(username, password string) (bool, string) // Returns (valid, serviceUUID)
@@ -32,6 +39,7 @@ func NewServer(port, dataDir string) *SFTPServer {
 	return &SFTPServer{
 		Port:    port,
 		DataDir: dataDir,
+		limiter: newFailureLimiter(sftpMaxFailures, sftpFailureWindow, sftpBlockDuration),
 	}
 }
 
@@ -50,26 +58,32 @@ func (s *SFTPServer) Start() error {
 
 	// SSH server configuration
 	sshConfig := &ssh.ServerConfig{
+		MaxAuthTries: 3,
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
 			username := c.User()
-			password := string(pass)
+			host := hostOf(c.RemoteAddr())
 
-			// Try user-based authentication first (via Core API)
-			if authCallback != nil {
-				if valid, uuid := authCallback(username, password); valid {
+			if s.limiter.blocked(host) {
+				return nil, fmt.Errorf("too many failed attempts")
+			}
+
+			// Atlas usernames are always "<service id>.<username>". Anything else
+			// is a scanner and is rejected without a round trip to Core.
+			if authCallback != nil && strings.Contains(username, ".") {
+				if valid, uuid := authCallback(username, string(pass)); valid {
 					uuid = strings.TrimSpace(uuid)
-					log.Printf("[SFTP] ✓ User Authenticated: %s (Service: %s)", username, uuid)
-
-					// Verify service directory exists
-					serviceDir := filepath.Join(s.DataDir, uuid)
-					if _, err := os.Stat(serviceDir); err != nil {
-						log.Printf("[SFTP] Service directory check failed: uuid=%q path=%q err=%v", uuid, serviceDir, err)
-						if os.IsNotExist(err) {
-							log.Printf("[SFTP] Service directory not found: %s", uuid)
-						}
+					if !serverfs.IsServiceDirectoryName(uuid) {
 						return nil, fmt.Errorf("service not found")
 					}
 
+					serviceDir := filepath.Join(s.DataDir, uuid)
+					if _, err := os.Stat(serviceDir); err != nil {
+						log.Printf("[SFTP] Service directory check failed: uuid=%q path=%q err=%v", uuid, serviceDir, err)
+						return nil, fmt.Errorf("service not found")
+					}
+
+					s.limiter.succeed(host)
+					log.Printf("[SFTP] User authenticated: %s (Service: %s)", username, uuid)
 					return &ssh.Permissions{
 						Extensions: map[string]string{
 							"uuid":     uuid,
@@ -79,28 +93,9 @@ func (s *SFTPServer) Start() error {
 				}
 			}
 
-			// Fallback: Legacy format service_<UUID> with node token
-			if strings.HasPrefix(username, "service_") && password == config.NodeConfig.NodeToken {
-				uuid := strings.TrimSpace(strings.TrimPrefix(username, "service_"))
-				serviceDir := filepath.Join(s.DataDir, uuid)
-				if _, err := os.Stat(serviceDir); err != nil {
-					log.Printf("[SFTP] Service directory check failed: uuid=%q path=%q err=%v", uuid, serviceDir, err)
-					if os.IsNotExist(err) {
-						log.Printf("[SFTP] Service directory not found: %s", uuid)
-					}
-					return nil, fmt.Errorf("service not found")
-				}
-
-				log.Printf("[SFTP] ✓ Legacy Auth: %s", username)
-				return &ssh.Permissions{
-					Extensions: map[string]string{
-						"uuid":     uuid,
-						"username": "legacy",
-					},
-				}, nil
+			if s.limiter.fail(host) {
+				log.Printf("[SFTP] Blocking %s for %s after repeated failed logins", host, sftpBlockDuration)
 			}
-
-			log.Printf("[SFTP] Authentication failed for: %s", username)
 			return nil, fmt.Errorf("invalid credentials")
 		},
 	}

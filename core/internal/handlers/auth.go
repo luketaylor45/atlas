@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/luketaylor45/atlas/core/internal/config"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
 	"github.com/luketaylor45/atlas/core/internal/utils"
@@ -54,6 +55,11 @@ func Login(c *gin.Context) {
 
 // Register creates a new regular user account
 func Register(c *gin.Context) {
+	if !config.AppConfig.RegistrationEnabled {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Registration is disabled. Ask an administrator to create your account."})
+		return
+	}
+
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -148,5 +154,8 @@ func InitialSetup(c *gin.Context) {
 func GetSetupStatus(c *gin.Context) {
 	var count int64
 	database.DB.Model(&models.User{}).Count(&count)
-	c.JSON(http.StatusOK, gin.H{"setup_required": count == 0})
+	c.JSON(http.StatusOK, gin.H{
+		"setup_required":       count == 0,
+		"registration_enabled": config.AppConfig.RegistrationEnabled,
+	})
 }

@@ -194,7 +194,7 @@ func CreateService(c *gin.Context) {
 }
 
 func notifyDaemon(node *models.Node, service *models.Service, egg *models.Egg) error {
-	url := fmt.Sprintf("http://%s:%s/api/servers", node.Address, node.Port)
+	url := nodeURL(node, "/api/servers")
 
 	eggImage := service.DockerImage
 	if eggImage == "" {
@@ -284,7 +284,7 @@ func DeleteService(c *gin.Context) {
 }
 
 func notifyDaemonDelete(node *models.Node, uuid string) error {
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s", node.Address, node.Port, uuid)
+	url := nodeURL(node, fmt.Sprintf("/api/servers/%s", uuid))
 
 	client := &http.Client{
 		Timeout: 1 * time.Second,
@@ -351,7 +351,7 @@ func UpdateService(c *gin.Context) {
 }
 
 func notifyDaemonUpdate(node *models.Node, service *models.Service, egg *models.Egg) error {
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s", node.Address, node.Port, service.UUID)
+	url := nodeURL(node, fmt.Sprintf("/api/servers/%s", service.UUID))
 
 	payload := map[string]interface{}{
 		"memory":          service.Memory,

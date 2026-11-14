@@ -14,6 +14,7 @@ export default function CreateNodePage() {
         address: '',
         port: '8081',
         sftp_port: '2022',
+        internal_address: '',
         total_ram: 1024,
         total_disk: 10240,
         location: 'Unknown'
@@ -111,6 +112,16 @@ export default function CreateNodePage() {
                                     value={formData.address}
                                     onChange={e => setFormData({ ...formData, address: e.target.value })}
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-xs font-medium uppercase tracking-wide text-muted">Internal Address (optional)</label>
+                                <input
+                                    className="input-field"
+                                    placeholder="daemon"
+                                    value={formData.internal_address}
+                                    onChange={e => setFormData({ ...formData, internal_address: e.target.value })}
+                                />
+                                <p className="text-xs text-muted">How the panel reaches this node&apos;s daemon. Use &quot;daemon&quot; for the node in the same Docker Compose stack; leave empty to use the public address.</p>
                             </div>
                             <div className="space-y-2">
                                 <label className="text-xs font-medium uppercase tracking-wide text-muted">Daemon Port</label>

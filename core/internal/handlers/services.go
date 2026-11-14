@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,86 @@ func nodeErrorMessage(body io.Reader, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// nodeStatus maps a node's HTTP status onto the one Core returns. A node
+// rejecting Core's token is a server-side fault, and must not reach the
+// browser as 401, which the panel treats as an expired session.
+func nodeStatus(code int) int {
+	if code == http.StatusUnauthorized || code == http.StatusForbidden || code == http.StatusServiceUnavailable {
+		return http.StatusBadGateway
+	}
+	return code
+}
+
+// respondNodeResult relays the outcome of a node operation, including its error.
+func respondNodeResult(c *gin.Context, resp *http.Response, fallback string) {
+	if resp.StatusCode >= 400 {
+		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+// validateEnvironmentOverrides checks user-supplied variables against the
+// egg. Only variables the egg defines are accepted, and only editable ones
+// unless the caller is an admin, so a user cannot inject arbitrary values into
+// the container environment or the startup command.
+func validateEnvironmentOverrides(raw string, egg *models.Egg, current string, isAdmin bool) (string, error) {
+	submitted := make(map[string]string)
+	if strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &submitted); err != nil {
+			return "", fmt.Errorf("environment must be a JSON object of text values")
+		}
+	}
+	existing := make(map[string]string)
+	if strings.TrimSpace(current) != "" {
+		_ = json.Unmarshal([]byte(current), &existing)
+	}
+
+	known := make(map[string]models.EggVariable, len(egg.Variables))
+	for _, variable := range egg.Variables {
+		known[variable.EnvironmentVariable] = variable
+	}
+
+	result := make(map[string]string, len(known))
+	for key, variable := range known {
+		value, hasCurrent := existing[key]
+		if !hasCurrent {
+			value = variable.DefaultValue
+		}
+		if next, ok := submitted[key]; ok && next != value {
+			if !isAdmin && !variable.UserEditable {
+				return "", fmt.Errorf("%s cannot be changed", variable.Name)
+			}
+			if strings.ContainsAny(next, "\n\r\x00") {
+				return "", fmt.Errorf("%s must be a single line", variable.Name)
+			}
+			value = next
+		}
+		result[key] = value
+	}
+	// Values stored before the egg dropped a variable are kept as they are,
+	// but nothing new may be introduced outside the egg's definition.
+	for key, value := range existing {
+		if _, ok := known[key]; !ok {
+			result[key] = value
+		}
+	}
+	for key, value := range submitted {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		if previous, stored := existing[key]; !stored || previous != value {
+			return "", fmt.Errorf("unknown variable %q", key)
+		}
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 // GetUserOverview returns statistics for the user dashboard
@@ -173,7 +254,7 @@ func ServicePowerAction(c *gin.Context) {
 	finalEnvJSON, _ := json.Marshal(mergedEnv)
 
 	// Proxy to Daemon
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/power", service.Node.Address, service.Node.Port, service.UUID)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/power", service.UUID))
 
 	payloadObj := struct {
 		Action         string `json:"action"`
@@ -192,7 +273,7 @@ func ServicePowerAction(c *gin.Context) {
 	log.Printf("[Core] Sending Power Action '%s' to Node %s (Service: %s). Env count: %d", req.Action, service.Node.Name, service.UUID, len(mergedEnv))
 
 	payload, _ := json.Marshal(payloadObj)
-	client := &http.Client{}
+	client := daemonHTTP
 	proxyReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(payload))
 	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
 	proxyReq.Header.Set("Content-Type", "application/json")
@@ -206,7 +287,7 @@ func ServicePowerAction(c *gin.Context) {
 
 	if resp.StatusCode >= 400 {
 		fallback := fmt.Sprintf("Node returned HTTP %d during power action", resp.StatusCode)
-		c.JSON(resp.StatusCode, gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
+		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
 		return
 	}
 
@@ -244,10 +325,10 @@ func ServiceSendCommand(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/command", service.Node.Address, service.Node.Port, service.UUID)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/command", service.UUID))
 	payload, _ := json.Marshal(req)
 
-	client := &http.Client{}
+	client := daemonHTTP
 	proxyReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(payload))
 	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
 	proxyReq.Header.Set("Content-Type", "application/json")
@@ -259,7 +340,7 @@ func ServiceSendCommand(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.JSON(http.StatusOK, gin.H{"status": "success"})
+	respondNodeResult(c, resp, "The node could not deliver the command")
 }
 
 // ServiceReinstall proxies a reinstall request to the target node
@@ -279,7 +360,7 @@ func ServiceReinstall(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/reinstall", service.Node.Address, service.Node.Port, service.UUID)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/reinstall", service.UUID))
 
 	// MERGE Environment for Installer
 	mergedEnv := make(map[string]string)
@@ -316,7 +397,7 @@ func ServiceReinstall(c *gin.Context) {
 	}
 	body, _ := json.Marshal(payload)
 
-	client := &http.Client{}
+	client := daemonHTTP
 	proxyReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
 	proxyReq.Header.Set("Content-Type", "application/json")
@@ -329,7 +410,7 @@ func ServiceReinstall(c *gin.Context) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		c.JSON(resp.StatusCode, gin.H{"error": nodeErrorMessage(resp.Body, "Node returned error during reinstall trigger")})
+		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, "Node returned error during reinstall trigger")})
 		return
 	}
 
@@ -371,20 +452,35 @@ func UpdateServiceEnvironment(c *gin.Context) {
 		return
 	}
 
-	updates := map[string]interface{}{
-		"environment": req.Environment,
+	isAdmin, _ := c.Get("is_admin")
+	admin, _ := isAdmin.(bool)
+
+	environment, err := validateEnvironmentOverrides(req.Environment, &service.Egg, service.Environment, admin)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	if req.StartupCommand != "" {
+
+	updates := map[string]interface{}{
+		"environment": environment,
+	}
+	// The startup command decides what runs in the container, so only an
+	// administrator may replace it. Everyone else configures it through variables.
+	if req.StartupCommand != "" && req.StartupCommand != resolveStartupCommand(service) {
+		if !admin {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only an administrator can change the startup command"})
+			return
+		}
 		updates["startup_command"] = req.StartupCommand
 		service.StartupCommand = req.StartupCommand
 	}
-	service.Environment = req.Environment
+	service.Environment = environment
 	if err := database.DB.Model(&models.Service{}).Where("id = ?", service.ID).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update environment"})
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s", service.Node.Address, service.Node.Port, service.UUID)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s", service.UUID))
 	payload := map[string]interface{}{
 		"memory":          service.Memory,
 		"disk":            service.Disk,
@@ -396,7 +492,7 @@ func UpdateServiceEnvironment(c *gin.Context) {
 	}
 	body, _ := json.Marshal(payload)
 
-	client := &http.Client{}
+	client := daemonHTTP
 	proxyReq, _ := http.NewRequest("PUT", url, bytes.NewBuffer(body))
 	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
 	proxyReq.Header.Set("Content-Type", "application/json")
@@ -409,7 +505,7 @@ func UpdateServiceEnvironment(c *gin.Context) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		c.JSON(resp.StatusCode, gin.H{"error": "Saved configuration, but node rejected the update"})
+		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, "Saved configuration, but the node rejected the update")})
 		return
 	}
 
@@ -438,11 +534,11 @@ func ServiceListFiles(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/list?path=%s", service.Node.Address, service.Node.Port, service.UUID, path)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files/list?path=%s", service.UUID, url.QueryEscape(path)))
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("X-Node-Token", service.Node.Token)
 
-	client := &http.Client{}
+	client := daemonHTTP
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
@@ -450,7 +546,7 @@ func ServiceListFiles(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+	c.DataFromReader(nodeStatus(resp.StatusCode), resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
 }
 
 func ServiceGetFileContent(c *gin.Context) {
@@ -470,11 +566,11 @@ func ServiceGetFileContent(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/content?path=%s", service.Node.Address, service.Node.Port, service.UUID, path)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files/content?path=%s", service.UUID, url.QueryEscape(path)))
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("X-Node-Token", service.Node.Token)
 
-	client := &http.Client{}
+	client := daemonHTTP
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
@@ -482,7 +578,7 @@ func ServiceGetFileContent(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+	c.DataFromReader(nodeStatus(resp.StatusCode), resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
 }
 
 func ServiceWriteFile(c *gin.Context) {
@@ -502,12 +598,12 @@ func ServiceWriteFile(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/write?path=%s", service.Node.Address, service.Node.Port, service.UUID, path)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files/write?path=%s", service.UUID, url.QueryEscape(path)))
 	req, _ := http.NewRequest("POST", url, c.Request.Body)
 	req.Header.Set("X-Node-Token", service.Node.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := daemonHTTP
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
@@ -515,7 +611,7 @@ func ServiceWriteFile(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.JSON(resp.StatusCode, gin.H{"status": "success"})
+	respondNodeResult(c, resp, "The node could not complete the file operation")
 }
 
 func ServiceCreateFolder(c *gin.Context) {
@@ -534,12 +630,12 @@ func ServiceCreateFolder(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/create-folder", service.Node.Address, service.Node.Port, service.UUID)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files/create-folder", service.UUID))
 	req, _ := http.NewRequest("POST", url, c.Request.Body)
 	req.Header.Set("X-Node-Token", service.Node.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := daemonHTTP
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
@@ -547,7 +643,7 @@ func ServiceCreateFolder(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.JSON(resp.StatusCode, gin.H{"status": "success"})
+	respondNodeResult(c, resp, "The node could not complete the file operation")
 }
 
 func ServiceExtractArchive(c *gin.Context) {
@@ -577,7 +673,7 @@ func ServiceExtractArchive(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare extraction request"})
 		return
 	}
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/extract", service.Node.Address, service.Node.Port, service.UUID)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files/extract", service.UUID))
 	proxyRequest, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare node request"})
@@ -586,7 +682,7 @@ func ServiceExtractArchive(c *gin.Context) {
 	proxyRequest.Header.Set("X-Node-Token", service.Node.Token)
 	proxyRequest.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{}).Do(proxyRequest)
+	resp, err := daemonHTTP.Do(proxyRequest)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
 		return
@@ -595,12 +691,12 @@ func ServiceExtractArchive(c *gin.Context) {
 
 	if resp.StatusCode >= 400 {
 		fallback := fmt.Sprintf("Node returned HTTP %d while extracting the archive", resp.StatusCode)
-		c.JSON(resp.StatusCode, gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
+		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
 		return
 	}
 
 	utils.LogActivity(c, service.ID, "file_extract", extractRequest.Path, "Extracted ZIP archive", nil)
-	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+	c.DataFromReader(nodeStatus(resp.StatusCode), resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
 }
 
 func ServiceDeleteFile(c *gin.Context) {
@@ -620,11 +716,11 @@ func ServiceDeleteFile(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files?path=%s", service.Node.Address, service.Node.Port, service.UUID, path)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files?path=%s", service.UUID, url.QueryEscape(path)))
 	req, _ := http.NewRequest("DELETE", url, nil)
 	req.Header.Set("X-Node-Token", service.Node.Token)
 
-	client := &http.Client{}
+	client := daemonHTTP
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
@@ -632,7 +728,7 @@ func ServiceDeleteFile(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.JSON(resp.StatusCode, gin.H{"status": "success"})
+	respondNodeResult(c, resp, "The node could not complete the file operation")
 }
 
 func ServiceUploadFile(c *gin.Context) {
@@ -652,14 +748,14 @@ func ServiceUploadFile(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/upload?path=%s", service.Node.Address, service.Node.Port, service.UUID, path)
+	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/files/upload?path=%s", service.UUID, url.QueryEscape(path)))
 
 	// Proxy the multipart body
 	req, _ := http.NewRequest("POST", url, c.Request.Body)
 	req.Header.Set("X-Node-Token", service.Node.Token)
 	req.Header.Set("Content-Type", c.GetHeader("Content-Type"))
 
-	client := &http.Client{}
+	client := daemonTransferHTTP
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
@@ -667,5 +763,5 @@ func ServiceUploadFile(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.JSON(resp.StatusCode, gin.H{"status": "success"})
+	respondNodeResult(c, resp, "The node could not complete the file operation")
 }

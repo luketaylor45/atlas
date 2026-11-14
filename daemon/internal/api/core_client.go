@@ -39,6 +39,7 @@ func postCoreJSON(path string, payload any) error {
 		return fmt.Errorf("create core request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Node-Token", config.NodeConfig.NodeToken)
 
 	resp, err := coreHTTPClient.Do(req)
 	if err != nil {

@@ -2,9 +2,7 @@ package main
 
 import (
 	"log"
-	"time"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/daemon/internal/api"
 	"github.com/luketaylor45/atlas/daemon/internal/config"
@@ -42,17 +40,16 @@ func main() {
 	// Start Heartbeat
 	go api.StartHeartbeat()
 
-	r := gin.Default()
+	if !api.NodeTokenConfigured() {
+		log.Println("[WARN] NODE_TOKEN is not set. Every API request will be rejected until the token from Admin > Nodes is configured.")
+	}
 
-	// CORS Setup
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Node-Token"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+	// Only Core talks to the daemon, so no proxy headers are trusted and no
+	// browser origins are allowed.
+	_ = r.SetTrustedProxies(nil)
 
 	r.GET("/status", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -61,24 +58,27 @@ func main() {
 		})
 	})
 
-	// Secure Routes
-	r.POST("/api/servers", api.CreateServer)
-	r.POST("/api/servers/:uuid/power", api.HandlePowerAction)
-	r.GET("/api/servers/:uuid/console", api.HandleConsole)
-	r.GET("/api/servers/:uuid/stats", api.HandleStats)
-	r.POST("/api/servers/:uuid/command", api.HandleSendCommand)
-	r.POST("/api/servers/:uuid/reinstall", api.HandleReinstall)
-	r.PUT("/api/servers/:uuid", api.UpdateServer)
-	r.DELETE("/api/servers/:uuid", api.DeleteServer)
+	// Every API route requires the node token.
+	servers := r.Group("/api/servers", api.RequireNodeToken())
+	servers.POST("", api.CreateServer)
+
+	server := servers.Group("/:uuid", api.RequireServiceUUID())
+	server.POST("/power", api.HandlePowerAction)
+	server.GET("/console", api.HandleConsole)
+	server.GET("/stats", api.HandleStats)
+	server.POST("/command", api.HandleSendCommand)
+	server.POST("/reinstall", api.HandleReinstall)
+	server.PUT("", api.UpdateServer)
+	server.DELETE("", api.DeleteServer)
 
 	// File Management
-	r.GET("/api/servers/:uuid/files/list", api.ListFiles)
-	r.GET("/api/servers/:uuid/files/content", api.GetFileContent)
-	r.POST("/api/servers/:uuid/files/write", api.WriteFile)
-	r.POST("/api/servers/:uuid/files/create-folder", api.CreateFolder)
-	r.POST("/api/servers/:uuid/files/extract", api.ExtractArchive)
-	r.POST("/api/servers/:uuid/files/upload", api.UploadFile)
-	r.DELETE("/api/servers/:uuid/files", api.DeleteFile)
+	server.GET("/files/list", api.ListFiles)
+	server.GET("/files/content", api.GetFileContent)
+	server.POST("/files/write", api.WriteFile)
+	server.POST("/files/create-folder", api.CreateFolder)
+	server.POST("/files/extract", api.ExtractArchive)
+	server.POST("/files/upload", api.UploadFile)
+	server.DELETE("/files", api.DeleteFile)
 
 	log.Printf("Daemon listening on port %s", config.NodeConfig.Port)
 	if err := r.Run(":" + config.NodeConfig.Port); err != nil {

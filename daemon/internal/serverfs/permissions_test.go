@@ -75,14 +75,14 @@ func TestServiceDirectoryName(t *testing.T) {
 		"ABCDEF12-ABCD-ABCD-ABCD-ABCDEF123456",
 	}
 	for _, name := range valid {
-		if !isServiceDirectoryName(name) {
+		if !IsServiceDirectoryName(name) {
 			t.Fatalf("valid UUID directory %q was rejected", name)
 		}
 	}
 
 	invalid := []string{"lost+found", "server-1", "12345678-1234-1234-1234-123456789abz"}
 	for _, name := range invalid {
-		if isServiceDirectoryName(name) {
+		if IsServiceDirectoryName(name) {
 			t.Fatalf("non-service directory %q was accepted", name)
 		}
 	}

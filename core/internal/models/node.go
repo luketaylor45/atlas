@@ -9,7 +9,10 @@ import (
 type Node struct {
 	ID       uint   `gorm:"primaryKey" json:"id"`
 	Name     string `gorm:"size:255;not null" json:"name"`
-	Address  string `gorm:"not null" json:"address"` // IP or Domain
+	Address  string `gorm:"not null" json:"address"` // Public IP or domain shown to players and SFTP users
+	// InternalAddress is how Core reaches the daemon (for example the Compose
+	// service name "daemon"). Empty means the public address is used.
+	InternalAddress string `gorm:"size:255;default:''" json:"internal_address"`
 	Port     string `gorm:"default:'8081'" json:"port"`
 	SFTPPort string `gorm:"default:'2022'" json:"sftp_port"`
 	Token    string `gorm:"uniqueIndex;not null" json:"-"`
