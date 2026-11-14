@@ -1,4 +1,4 @@
-version: '3.8'
+#version: '3.8'
 
 services:
   # Atlas Core API
@@ -60,6 +60,9 @@ services:
       - NODE_TOKEN=${NODE_TOKEN:-change-me}
       - SFTP_PORT=2022
       - DATA_PATH=/var/lib/atlas/data
+      - HOST_DATA_PATH=${DATA_PATH:-/var/lib/atlas/data}
+      - SERVER_UID=${SERVER_UID:-1000}
+      - SERVER_GID=${SERVER_GID:-1000}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DATA_PATH:-/var/lib/atlas/data}:/var/lib/atlas/data

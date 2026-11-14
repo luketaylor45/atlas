@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import Logo from '../../components/Logo';
 import api from '../../lib/api';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 
 export default function RegisterPage() {
     const navigate = useNavigate();

@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { isAxiosError } from 'axios';
 import { useParams } from 'react-router-dom';
 import api from '../../lib/api';
 import {
     Folder, ChevronRight, Home, Upload,
-    Plus, Trash2, Save, X, MoreVertical,
+    Plus, Trash2, Save, X, ArchiveRestore,
     FileText, Code, Settings, CornerUpLeft, RefreshCw, Key
 } from 'lucide-react';
 import clsx from 'clsx';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 
 interface FileInfo {
     name: string;
@@ -15,7 +16,15 @@ interface FileInfo {
     is_dir: boolean;
 }
 
-export default function FileManager({ service }: { service?: any }) {
+interface FileManagerService {
+    uuid?: string;
+    node?: {
+        address?: string;
+        sftp_port?: string | number;
+    };
+}
+
+export default function FileManager({ service }: { service?: FileManagerService }) {
     const { user } = useAuth();
     const { uuid } = useParams();
     const [path, setPath] = useState('');
@@ -25,22 +34,30 @@ export default function FileManager({ service }: { service?: any }) {
     const [showNewFolderModal, setShowNewFolderModal] = useState(false);
     const [showSFTPModal, setShowSFTPModal] = useState(false);
     const [newFolderName, setNewFolderName] = useState('');
+    const [extractingFile, setExtractingFile] = useState<string | null>(null);
 
-    const fetchFiles = async () => {
+    const fetchFiles = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await api.get(`/services/${uuid}/files/list?path=${path}`);
-            setFiles(res.data);
+            const res = await api.get(`/services/${uuid}/files/list`, {
+                params: { path },
+            });
+            setFiles(Array.isArray(res.data) ? res.data : []);
         } catch (err) {
             console.error(err);
+            setFiles([]);
         } finally {
             setLoading(false);
         }
-    };
+    }, [path, uuid]);
 
     useEffect(() => {
-        fetchFiles();
-    }, [path]);
+        void fetchFiles();
+    }, [fetchFiles]);
+
+    const sftpUsername = service?.uuid && user?.username
+        ? `${service.uuid.substring(0, 8)}.${user.username}`
+        : 'N/A';
 
     const navigateTo = (folderName: string) => {
         const newPath = path === '' ? folderName : `${path}/${folderName}`;
@@ -74,7 +91,7 @@ export default function FileManager({ service }: { service?: any }) {
             const fullPath = path === '' ? name : `${path}/${name}`;
             const res = await api.get(`/services/${uuid}/files/content?path=${fullPath}`);
             setEditingFile({ name: fullPath, content: res.data });
-        } catch (err) {
+        } catch {
             alert("Failed to read file.");
         }
     };
@@ -88,7 +105,7 @@ export default function FileManager({ service }: { service?: any }) {
             });
             setEditingFile(null);
             fetchFiles();
-        } catch (err) {
+        } catch {
             alert("Failed to save file.");
         }
     };
@@ -99,8 +116,30 @@ export default function FileManager({ service }: { service?: any }) {
             const fullPath = path === '' ? name : `${path}/${name}`;
             await api.delete(`/services/${uuid}/files?path=${fullPath}`);
             fetchFiles();
-        } catch (err) {
+        } catch {
             alert("Failed to delete.");
+        }
+    };
+
+    const extractArchive = async (name: string) => {
+        const fullPath = path === '' ? name : `${path}/${name}`;
+        if (!confirm(`Extract ${name} into this folder? Existing files with the same names will be overwritten.`)) return;
+
+        setExtractingFile(name);
+        try {
+            const response = await api.post<{ extracted: number }>(`/services/${uuid}/files/extract`, {
+                path: fullPath,
+            });
+            await fetchFiles();
+            const extracted = response.data.extracted;
+            alert(`${name} extracted successfully${Number.isFinite(extracted) ? ` (${extracted} items)` : ''}.`);
+        } catch (err: unknown) {
+            const message = isAxiosError<{ error?: string }>(err)
+                ? err.response?.data?.error
+                : undefined;
+            alert(message || `Failed to extract ${name}.`);
+        } finally {
+            setExtractingFile(null);
         }
     };
 
@@ -111,7 +150,7 @@ export default function FileManager({ service }: { service?: any }) {
             setNewFolderName('');
             setShowNewFolderModal(false);
             fetchFiles();
-        } catch (err) {
+        } catch {
             alert("Failed to create folder.");
         }
     };
@@ -129,7 +168,7 @@ export default function FileManager({ service }: { service?: any }) {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             fetchFiles();
-        } catch (err) {
+        } catch {
             alert("Failed to upload file.");
         } finally {
             setLoading(false);
@@ -236,16 +275,30 @@ export default function FileManager({ service }: { service?: any }) {
                                             <span className="text-xs font-medium text-muted">{file.is_dir ? '--' : formatSize(file.size)}</span>
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                            <div className="flex items-center justify-end gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); deleteItem(file.name); }}
-                                                    className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors"
+                                                    disabled={extractingFile !== null}
+                                                    aria-label={`Delete ${file.name}`}
+                                                    title="Delete"
+                                                    className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-lg text-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     <Trash2 size={16} />
                                                 </button>
-                                                <button className="p-2 hover:bg-secondary rounded-lg text-muted transition-colors">
-                                                    <MoreVertical size={16} />
-                                                </button>
+                                                {!file.is_dir && file.name.toLowerCase().endsWith('.zip') && (
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); void extractArchive(file.name); }}
+                                                        disabled={extractingFile !== null}
+                                                        aria-label={`Extract ${file.name}`}
+                                                        title="Extract ZIP archive"
+                                                        className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {extractingFile === file.name
+                                                            ? <RefreshCw size={15} className="animate-spin" />
+                                                            : <ArchiveRestore size={15} />}
+                                                        <span>{extractingFile === file.name ? 'Extracting' : 'Extract'}</span>
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -355,22 +408,23 @@ export default function FileManager({ service }: { service?: any }) {
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Server Address</label>
                                     <div className="p-3 bg-secondary/50 border border-border rounded-xl font-mono text-xs break-all">
-                                        {service.node?.address || 'N/A'}
+                                        {service?.node?.address || 'N/A'}
                                     </div>
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Port</label>
                                     <div className="p-3 bg-secondary/50 border border-border rounded-xl font-mono text-xs">
-                                        {service.node?.sftp_port || '2022'}
+                                        {service?.node?.sftp_port || '2022'}
                                     </div>
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Username</label>
                                     <div className="p-3 bg-secondary/50 border border-border rounded-xl font-mono text-xs flex justify-between items-center group">
-                                        <span>{service.uuid?.substring(0, 8)}.{user?.username}</span>
+                                        <span>{sftpUsername}</span>
                                         <button
-                                            onClick={() => navigator.clipboard.writeText(`${service.uuid?.substring(0, 8)}.${user?.username}`)}
-                                            className="text-[9px] font-bold text-primary opacity-0 group-hover:opacity-100 transition-opacity uppercase"
+                                            onClick={() => navigator.clipboard.writeText(sftpUsername)}
+                                            disabled={sftpUsername === 'N/A'}
+                                            className="text-[9px] font-bold text-primary opacity-0 group-hover:opacity-100 transition-opacity uppercase disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             Copy
                                         </button>

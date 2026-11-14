@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useEffectEvent, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import {
     Play, Square, RefreshCcw, Skull,
-    Terminal, Activity,
+    Terminal, Activity, Save,
     ChevronRight, ArrowLeft, Settings, FolderClosed, Rocket,
-    Globe, AlertTriangle, Layers, Users, Clock, ArrowDown, ArrowUp
+    Globe, AlertTriangle, Layers, Users, Clock, ArrowDown, ArrowUp, CheckCircle2
 } from 'lucide-react';
 import clsx from 'clsx';
 import FileManager from './FileManager';
@@ -15,14 +15,44 @@ import ServiceActivityTab from './ServiceActivityTab';
 type Tab = 'console' | 'files' | 'startup' | 'settings' | 'users' | 'activity';
 
 interface LogLine {
+    id: string;
     time: string;
     message: string;
 }
+
+let nextLocalLogID = 0;
+
+const makeLogLine = (message: string, time = new Date().toLocaleTimeString([], {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+})): LogLine => ({
+    id: `local-${Date.now()}-${nextLocalLogID++}`,
+    time,
+    message
+});
 
 // Helper to strip ANSI escape codes
 const stripAnsi = (str: string) => {
     return str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
 };
+
+const requestErrorMessage = (error: unknown, fallback: string) => {
+    const responseMessage = (error as { response?: { data?: { error?: unknown } } })
+        ?.response?.data?.error;
+    if (typeof responseMessage === 'string' && responseMessage.trim()) {
+        return responseMessage.trim();
+    }
+    if (error instanceof Error && error.message.trim()) {
+        return `${fallback} ${error.message.trim()}`;
+    }
+    return fallback;
+};
+
+const isContainerUnavailableStatus = (status?: string) => (
+    status === 'installing' || status === 'installation_failed'
+);
 
 export default function ServiceConsolePage() {
     const { uuid } = useParams();
@@ -37,8 +67,18 @@ export default function ServiceConsolePage() {
     const [activeTab, setActiveTab] = useState<Tab>('console');
     const [showReinstallConfirm, setShowReinstallConfirm] = useState(false);
     const [wsVersion, setWsVersion] = useState(0); // Used to force WS reconnect
+    const [startupCommand, setStartupCommand] = useState('');
+    const [startupEnv, setStartupEnv] = useState<Record<string, string>>({});
+    const [startupSaving, setStartupSaving] = useState(false);
+    const [startupDirty, setStartupDirty] = useState(false);
+    const [startupMessage, setStartupMessage] = useState('');
+    const [startupMessageType, setStartupMessageType] = useState<'idle' | 'info' | 'success' | 'error'>('idle');
+    const [lastStartupSaveAt, setLastStartupSaveAt] = useState<string | null>(null);
+    const [followOutput, setFollowOutput] = useState(true);
     const consoleRef = useRef<HTMLDivElement>(null);
+    const installationLogRef = useRef<HTMLDivElement>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    const lastInstallationStageRef = useRef('');
 
     const fetchDetails = async () => {
         try {
@@ -53,17 +93,25 @@ export default function ServiceConsolePage() {
             setLoading(false);
         }
     };
+    const pollDetails = useEffectEvent(fetchDetails);
 
     // Initial fetch and status polling
     useEffect(() => {
-        fetchDetails();
-        const interval = setInterval(fetchDetails, 5000);
+        pollDetails();
+        const interval = setInterval(pollDetails, service?.status === 'installing' ? 1000 : 5000);
         return () => clearInterval(interval);
+    }, [uuid, service?.status]);
+
+    useEffect(() => {
+        setStartupDirty(false);
+        setStartupMessage('');
+        setStartupMessageType('idle');
+        setLastStartupSaveAt(null);
     }, [uuid]);
 
     // WebSocket Logic
     useEffect(() => {
-        if (!service?.node || activeTab !== 'console' || service.status === 'installing') return;
+        if (!service?.node || activeTab !== 'console' || isContainerUnavailableStatus(service.status)) return;
 
         let reconnectTimer: any;
         let isStopped = false;
@@ -91,7 +139,7 @@ export default function ServiceConsolePage() {
             wsRef.current = ws;
 
             ws.onmessage = (event) => {
-                const rawData = event.data;
+                const rawData = String(event.data || '');
                 if (!rawData) return;
 
                 setLogs(prev => {
@@ -111,13 +159,16 @@ export default function ServiceConsolePage() {
                     // Strip ANSI codes from the message
                     logMsg = stripAnsi(logMsg);
 
-                    const newLog = { time: logTime, message: logMsg };
+                    const newLog = { id: `docker-${rawData}`, time: logTime, message: logMsg };
+                    if (prev.some(log => log.id === newLog.id)) {
+                        return prev;
+                    }
                     return [...prev, newLog].slice(-500);
                 });
             };
 
             ws.onclose = () => {
-                if (!isStopped) {
+                if (!isStopped && ['running', 'starting', 'stopping'].includes(service.status)) {
                     console.log("[Atlas] Console stream disconnected. Retrying in 2s...");
                     reconnectTimer = setTimeout(connect, 2000);
                 }
@@ -183,20 +234,56 @@ export default function ServiceConsolePage() {
 
     // Internal logs for installation or offline
     useEffect(() => {
-        if (service?.status === 'installing' && logs.length === 0) {
-            setLogs([{
-                time: new Date().toLocaleTimeString(),
-                message: "[Atlas] Initializing installation sequence..."
-            }]);
+        if (isContainerUnavailableStatus(service?.status) && logs.length === 0) {
+            const initialMessage = service.status === 'installation_failed'
+                ? `[Atlas] ${service.installation_stage || 'Installation failed before the game container was created.'}`
+                : "[Atlas] Initializing installation sequence...";
+            setLogs([makeLogLine(initialMessage)]);
         }
-    }, [service?.status]);
+    }, [service?.status, service?.installation_stage, logs.length]);
 
-    // Auto-scroll logic
     useEffect(() => {
-        if (consoleRef.current) {
-            consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+        if (!isContainerUnavailableStatus(service?.status)) {
+            lastInstallationStageRef.current = '';
+            return;
         }
-    }, [logs, activeTab, service?.status]);
+
+        const stage = service.installation_stage?.trim();
+        if (!stage || stage === lastInstallationStageRef.current) return;
+
+        lastInstallationStageRef.current = stage;
+        setLogs(prev => [...prev, makeLogLine(`[Atlas] ${stage}`)].slice(-500));
+    }, [service?.status, service?.installation_stage]);
+
+    useEffect(() => {
+        if (isContainerUnavailableStatus(service?.status) && installationLogRef.current) {
+            installationLogRef.current.scrollTop = installationLogRef.current.scrollHeight;
+        }
+    }, [logs, service?.status]);
+
+    useEffect(() => {
+        const consoleElement = consoleRef.current;
+        if (!consoleElement || activeTab !== 'console' || !followOutput) return;
+
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && selection.anchorNode && consoleElement.contains(selection.anchorNode)) {
+            setFollowOutput(false);
+            return;
+        }
+
+        consoleElement.scrollTop = consoleElement.scrollHeight;
+    }, [logs, activeTab, followOutput]);
+
+    useEffect(() => {
+        if (!service || startupDirty) return;
+
+        const nextEnv = service.environment
+            ? JSON.parse(service.environment)
+            : (service.egg?.environment ? JSON.parse(service.egg.environment) : {});
+
+        setStartupCommand(service.startup_command || service.egg?.startup_command || '');
+        setStartupEnv(nextEnv);
+    }, [service, startupDirty]);
 
     const handlePowerAction = async (action: string) => {
         setActionLoading(true);
@@ -209,19 +296,16 @@ export default function ServiceConsolePage() {
             'restart': 'RESTARTING SERVER...',
             'kill': 'TERMINATING SERVER PROCESS...'
         };
-        setLogs(prev => [...prev, { time, message: `[Atlas] ${actionLabels[action] || action.toUpperCase()}` }]);
-
-        // Ensure the new log line is scrolled into view immediately
-        setTimeout(() => {
-            if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
-        }, 50);
+        setFollowOutput(true);
+        setLogs(prev => [...prev, makeLogLine(`[Atlas] ${actionLabels[action] || action.toUpperCase()}`, time)]);
 
         try {
             await api.post(`/services/${uuid}/power`, { action });
             // Small delay then trigger WS reconnect
             setTimeout(() => setWsVersion(v => v + 1), 500);
         } catch (err) {
-            setLogs(prev => [...prev, { time, message: `[Error] Failed to ${action} server.` }]);
+            const message = requestErrorMessage(err, `Failed to ${action} server.`);
+            setLogs(prev => [...prev, makeLogLine(`[Error] ${message}`, time)]);
         } finally {
             setActionLoading(false);
             fetchDetails();
@@ -234,7 +318,7 @@ export default function ServiceConsolePage() {
             await api.post(`/services/${uuid}/command`, { command });
         } catch (err) {
             const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            setLogs(prev => [...prev, { time, message: `[Error] Failed to send command: ${command}` }]);
+            setLogs(prev => [...prev, makeLogLine(`[Error] Failed to send command: ${command}`, time)]);
         }
     };
 
@@ -244,6 +328,12 @@ export default function ServiceConsolePage() {
         try {
             await api.post(`/services/${uuid}/reinstall`);
             setLogs([]);
+            setService((current: any) => current ? {
+                ...current,
+                status: 'installing',
+                installation_stage: 'Reinstallation queued',
+                installation_progress: 0
+            } : current);
         } catch (err) {
             console.error("Failed to trigger reinstall", err);
         } finally {
@@ -252,21 +342,37 @@ export default function ServiceConsolePage() {
         }
     };
 
-    const handleUpdateEnvironment = async (env: any) => {
+    const handleSaveStartupConfiguration = async () => {
+        setStartupSaving(true);
+        setStartupMessage('Saving startup configuration...');
+        setStartupMessageType('info');
         try {
-            await api.post(`/services/${uuid}/environment`, {
-                environment: JSON.stringify(env)
+            const res = await api.post(`/services/${uuid}/environment`, {
+                startup_command: startupCommand,
+                environment: JSON.stringify(startupEnv)
             });
-            setService({ ...service, environment: JSON.stringify(env) });
+            setService({
+                ...service,
+                startup_command: res.data.startup_command ?? startupCommand,
+                environment: res.data.environment ?? JSON.stringify(startupEnv)
+            });
+            setStartupDirty(false);
+            setStartupMessage('Startup configuration saved to Atlas.');
+            setStartupMessageType('success');
+            setLastStartupSaveAt(new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            fetchDetails();
         } catch (err) {
-            console.error("Failed to update environment", err);
+            console.error("Failed to update startup configuration", err);
+            const errorMessage = (err as any)?.response?.data?.error || 'Failed to save startup configuration.';
+            setStartupMessage(errorMessage);
+            setStartupMessageType('error');
+        } finally {
+            setStartupSaving(false);
         }
     };
 
     if (loading) return <div className="p-12 text-center text-muted animate-pulse font-bold tracking-widest mt-20">Connecting...</div>;
     if (!service) return <div className="p-12 text-center text-red-500 font-bold">Server not found.</div>;
-
-    const envData = service.environment ? JSON.parse(service.environment) : (service.egg?.environment ? JSON.parse(service.egg.environment) : {});
 
     // Helper for status formatting
     const getStatusInfo = (status: string) => {
@@ -275,22 +381,29 @@ export default function ServiceConsolePage() {
         if (s === 'starting') return { label: 'Starting', color: 'bg-blue-500', pill: 'bg-blue-500/10 text-blue-500 border-blue-500/20' };
         if (s === 'stopping') return { label: 'Stopping', color: 'bg-amber-500', pill: 'bg-amber-500/10 text-amber-500 border-amber-500/20' };
         if (s === 'installing') return { label: 'Installing', color: 'bg-primary', pill: 'bg-primary/10 text-primary border-primary/20' };
+        if (s === 'installation_failed') return { label: 'Install Failed', color: 'bg-red-500', pill: 'bg-red-500/10 text-red-500 border-red-500/20' };
         if (s === 'offline' || s === '' || s === 'unknown') return { label: 'Offline', color: 'bg-zinc-500', pill: 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20' };
         return { label: 'Error', color: 'bg-red-500', pill: 'bg-red-500/10 text-red-500 border-red-500/20' };
     };
 
     const statusInfo = getStatusInfo(service.status);
+    const installationFailed = service.status === 'installation_failed';
+    const installationInProgress = service.status === 'installing';
 
     return (
         <div className="space-y-8 max-w-7xl mx-auto animation-enter relative">
             {/* Installation Overlay */}
-            {service.status === 'installing' && (
-                <div className="fixed inset-0 z-[100] bg-background flex flex-col items-center justify-center p-8 animate-in text-foreground">
-                    <div className="max-w-4xl w-full space-y-12">
+            {(installationInProgress || installationFailed) && (
+                <div className="fixed inset-0 z-[100] bg-background flex flex-col items-center overflow-y-auto p-8 animate-in text-foreground">
+                    <div className="max-w-4xl w-full space-y-12 my-auto py-8">
                         <div className="text-center space-y-4">
-                            <h2 className="text-4xl font-bold tracking-tight">Installing Server</h2>
+                            <h2 className={clsx("text-4xl font-bold tracking-tight", installationFailed && "text-red-500")}>
+                                {installationFailed ? 'Installation Failed' : 'Installing Server'}
+                            </h2>
                             <p className="text-muted font-medium">
-                                Setting up "{service.name}" on {service.node?.name}.
+                                {installationFailed
+                                    ? `The game container for "${service.name}" was not created.`
+                                    : `Setting up "${service.name}" on ${service.node?.name}.`}
                             </p>
                         </div>
 
@@ -322,15 +435,19 @@ export default function ServiceConsolePage() {
                         {/* Console Logs */}
                         <div className="panel-card !p-0 bg-black border-border overflow-hidden h-[300px]">
                             <div className="px-4 py-2 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
-                                <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Installation Logs</span>
+                                <span className={clsx("text-[10px] font-bold uppercase tracking-widest", installationFailed ? "text-red-400" : "text-zinc-500")}>
+                                    {installationFailed ? 'Installer Failure' : 'Installation Logs'}
+                                </span>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[10px] text-zinc-600 uppercase font-mono">{service.installation_stage || 'Waiting...'}</span>
-                                    <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                                    <span className={clsx("text-[10px] uppercase font-mono", installationFailed ? "text-red-400" : "text-zinc-600")}>
+                                        {service.installation_stage || 'Waiting...'}
+                                    </span>
+                                    <div className={clsx("w-1.5 h-1.5 rounded-full", installationFailed ? "bg-red-500" : "bg-primary animate-pulse")} />
                                 </div>
                             </div>
-                            <div ref={consoleRef} className="p-6 font-mono text-xs overflow-y-auto h-[calc(100%-35px)] space-y-1 text-zinc-400">
+                            <div ref={installationLogRef} className="p-6 font-mono text-xs overflow-y-auto h-[calc(100%-35px)] space-y-1 text-zinc-400">
                                 {logs.map((log, i) => (
-                                    <div key={i} className="flex gap-4">
+                                    <div key={log.id} className="flex gap-4">
                                         <span className="text-[10px] text-zinc-700 w-8 shrink-0">{i + 1}</span>
                                         <span className="break-all">{log.message}</span>
                                     </div>
@@ -346,11 +463,28 @@ export default function ServiceConsolePage() {
                             </div>
                             <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
                                 <div
-                                    className="h-full bg-primary transition-all duration-1000"
+                                    className={clsx("h-full transition-all duration-1000", installationFailed ? "bg-red-500" : "bg-primary")}
                                     style={{ width: `${service.installation_progress}%` }}
                                 />
                             </div>
                         </div>
+                        {installationFailed && (
+                            <div className="panel-card border-red-500/30 bg-red-500/5 p-6 flex flex-col md:flex-row md:items-center justify-between gap-5">
+                                <div>
+                                    <div className="text-xs font-bold uppercase tracking-widest text-red-400 mb-2">Recorded failure</div>
+                                    <p className="text-sm font-mono text-red-200 break-all">
+                                        {service.installation_stage || 'The installer exited before Atlas could create the game container.'}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setShowReinstallConfirm(true)}
+                                    disabled={actionLoading || (!isOwner && !permissions?.can_control_power)}
+                                    className="px-6 py-3 rounded-xl bg-red-600 text-white font-bold text-xs uppercase tracking-wider hover:bg-red-700 transition-colors disabled:opacity-40 shrink-0"
+                                >
+                                    Retry installation
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -414,7 +548,7 @@ export default function ServiceConsolePage() {
                 <div className="flex items-center gap-2 p-1.5 bg-secondary/50 rounded-2xl border border-border w-fit">
                     <button
                         onClick={() => handlePowerAction('start')}
-                        disabled={actionLoading || service.status === 'running' || service.status === 'starting' || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        disabled={actionLoading || service.status === 'running' || service.status === 'starting' || isContainerUnavailableStatus(service.status) || (!isOwner && !permissions?.can_control_power)}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-emerald-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <Play size={18} fill="currentColor" />
@@ -422,7 +556,7 @@ export default function ServiceConsolePage() {
                     </button>
                     <button
                         onClick={() => handlePowerAction('restart')}
-                        disabled={actionLoading || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        disabled={actionLoading || isContainerUnavailableStatus(service.status) || (!isOwner && !permissions?.can_control_power)}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-blue-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <RefreshCcw size={18} />
@@ -430,7 +564,7 @@ export default function ServiceConsolePage() {
                     </button>
                     <button
                         onClick={() => handlePowerAction('stop')}
-                        disabled={actionLoading || service.status === 'offline' || service.status === 'stopping' || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        disabled={actionLoading || service.status === 'offline' || service.status === 'stopping' || isContainerUnavailableStatus(service.status) || (!isOwner && !permissions?.can_control_power)}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-amber-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <Square size={18} fill="currentColor" />
@@ -438,7 +572,7 @@ export default function ServiceConsolePage() {
                     </button>
                     <button
                         onClick={() => handlePowerAction('kill')}
-                        disabled={actionLoading || service.status === 'installing' || (!isOwner && !permissions?.can_control_power)}
+                        disabled={actionLoading || isContainerUnavailableStatus(service.status) || (!isOwner && !permissions?.can_control_power)}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-secondary text-red-500 transition-all disabled:opacity-30 text-xs font-bold uppercase tracking-wider"
                     >
                         <Skull size={18} />
@@ -479,7 +613,19 @@ export default function ServiceConsolePage() {
                     {activeTab === 'console' && (
                         <div className="flex flex-col h-[600px] border border-zinc-800 bg-zinc-950 rounded-2xl overflow-hidden shadow-2xl">
                             <div className="px-6 py-3 bg-zinc-900/50 border-b border-zinc-800 flex items-center justify-between">
-                                <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Terminal Output</span>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Terminal Output</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setFollowOutput(true)}
+                                        className={clsx(
+                                            "text-[9px] font-bold uppercase tracking-widest transition-colors",
+                                            followOutput ? "text-emerald-500" : "text-amber-500 hover:text-amber-400"
+                                        )}
+                                    >
+                                        {followOutput ? 'Following' : 'Resume output'}
+                                    </button>
+                                </div>
                                 <div className="flex items-center gap-2">
                                     <div className={clsx("w-1.5 h-1.5 rounded-full", statusInfo.color)} />
                                     <span className="text-[10px] text-zinc-600 uppercase font-bold tracking-widest">
@@ -489,11 +635,17 @@ export default function ServiceConsolePage() {
                             </div>
                             <div
                                 ref={consoleRef}
+                                onMouseDown={() => setFollowOutput(false)}
+                                onScroll={(event) => {
+                                    const element = event.currentTarget;
+                                    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+                                    if (atBottom !== followOutput) setFollowOutput(atBottom);
+                                }}
                                 className="flex-1 p-6 font-mono text-sm overflow-y-auto space-y-1 selection:bg-primary/30 custom-scrollbar scroll-smooth"
                                 style={{ scrollBehavior: 'auto' }}
                             >
-                                {logs.map((log, i) => (
-                                    <div key={i} className="flex gap-4 group/line">
+                                {logs.map((log) => (
+                                    <div key={log.id} className="flex gap-4 group/line">
                                         <span className="text-[10px] text-zinc-700 font-mono w-14 shrink-0 pt-0.5 text-right select-none">
                                             {log.time}
                                         </span>
@@ -530,7 +682,7 @@ export default function ServiceConsolePage() {
                                         if (e.key === 'Enter') {
                                             const input = (e.target as HTMLInputElement).value;
                                             if (!input) return;
-                                            setLogs(prev => [...prev, { time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }), message: `> ${input}` }]);
+                                            setLogs(prev => [...prev, makeLogLine(`> ${input}`)]);
                                             handleSendCommand(input);
                                             (e.target as HTMLInputElement).value = '';
                                         }
@@ -547,27 +699,91 @@ export default function ServiceConsolePage() {
                     {activeTab === 'startup' && (
                         <div className="space-y-6">
                             <div className="panel-card p-8 border-border">
-                                <h3 className="text-lg font-bold mb-4">Startup Configuration</h3>
-                                <div className="p-4 bg-secondary rounded-xl font-mono text-xs text-muted break-all border border-border">
-                                    {service.egg?.startup_command}
+                                <div className="flex items-center justify-between gap-4 mb-4">
+                                    <h3 className="text-lg font-bold">Startup Configuration</h3>
+                                    <button
+                                        onClick={handleSaveStartupConfiguration}
+                                        disabled={startupSaving}
+                                        className="btn-primary flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <Save size={16} />
+                                        {startupSaving ? 'Saving...' : 'Save'}
+                                    </button>
                                 </div>
+                                <div
+                                    className={clsx(
+                                        "mb-4 rounded-xl border px-4 py-3 text-sm",
+                                        startupMessageType === 'success' && "border-emerald-500/20 bg-emerald-500/5 text-emerald-500",
+                                        startupMessageType === 'error' && "border-red-500/20 bg-red-500/5 text-red-500",
+                                        startupMessageType === 'info' && "border-blue-500/20 bg-blue-500/5 text-blue-500",
+                                        startupMessageType === 'idle' && "border-border bg-secondary/20 text-muted"
+                                    )}
+                                >
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2">
+                                            {startupMessageType === 'success' && <CheckCircle2 size={16} />}
+                                            {startupMessageType === 'error' && <AlertTriangle size={16} />}
+                                            {startupMessageType === 'info' && <Save size={16} />}
+                                            {startupMessageType === 'idle' && <Clock size={16} />}
+                                            <span>
+                                                {startupMessage || (startupDirty ? 'Unsaved startup changes.' : 'No pending startup changes.')}
+                                            </span>
+                                        </div>
+                                        <span className="text-xs uppercase tracking-widest">
+                                            {lastStartupSaveAt ? `Saved ${lastStartupSaveAt}` : (startupDirty ? 'Pending' : 'Idle')}
+                                        </span>
+                                    </div>
+                                </div>
+                                <textarea
+                                    value={startupCommand}
+                                    onChange={(e) => {
+                                        setStartupCommand(e.target.value);
+                                        setStartupDirty(true);
+                                        setStartupMessage('Unsaved startup changes.');
+                                        setStartupMessageType('info');
+                                    }}
+                                    className="input-field font-mono text-xs min-h-[140px]"
+                                />
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {Object.keys(envData).map(key => (
+                                {Object.keys(startupEnv).map(key => (
                                     <div key={key} className="panel-card p-6 border-border">
                                         <label className="text-[10px] font-bold text-muted uppercase tracking-widest block mb-4">{key}</label>
                                         <input
                                             type="text"
-                                            defaultValue={envData[key]}
-                                            onBlur={(e) => {
-                                                const newVal = e.target.value;
-                                                const newEnv = { ...envData, [key]: newVal };
-                                                handleUpdateEnvironment(newEnv);
+                                            value={startupEnv[key] ?? ''}
+                                            onChange={(e) => {
+                                                setStartupEnv(prev => ({ ...prev, [key]: e.target.value }));
+                                                setStartupDirty(true);
+                                                setStartupMessage('Unsaved startup changes.');
+                                                setStartupMessageType('info');
                                             }}
                                             className="input-field"
                                         />
                                     </div>
                                 ))}
+                            </div>
+                            <div className="panel-card p-6 border-border">
+                                <div className="flex items-center justify-between gap-4 text-xs uppercase tracking-widest">
+                                    <span className="text-muted">Server Snapshot</span>
+                                    <span className="font-bold">
+                                        {Object.keys(startupEnv).length} variables
+                                    </span>
+                                </div>
+                                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <div className="text-muted mb-2">Current saved startup command</div>
+                                        <div className="rounded-xl border border-border bg-secondary/20 p-3 font-mono text-xs break-all">
+                                            {service.startup_command || service.egg?.startup_command || 'Not set'}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-muted mb-2">Current saved environment JSON</div>
+                                        <div className="rounded-xl border border-border bg-secondary/20 p-3 font-mono text-xs break-all">
+                                            {service.environment || '{}'}
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     )}

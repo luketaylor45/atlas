@@ -1,7 +1,7 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { Home, Settings, LogOut, LayoutDashboard, Users, Layers, Activity, Package, Bell } from 'lucide-react';
 import clsx from 'clsx';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/auth';
 import Logo from './Logo';
 
 const SidebarItem = ({ icon: Icon, label, to }: { icon: any, label: string, to: string }) => {

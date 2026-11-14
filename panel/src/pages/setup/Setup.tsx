@@ -2,14 +2,14 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import Logo from '../../components/Logo';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 
 export default function SetupPage() {
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    const { user } = useAuth();
+    const { user, login } = useAuth();
 
     useEffect(() => {
         if (user) {
@@ -39,10 +39,9 @@ export default function SetupPage() {
             const res = await api.post('/auth/setup', { username, password });
 
             // Auto login if token provided
-            if (res.data.token) {
-                localStorage.setItem('token', res.data.token);
-                // Refreshing context is handled by AuthContext if we redirect to /
-                window.location.href = '/';
+            if (res.data.token && res.data.user) {
+                login(res.data.token, res.data.user);
+                navigate('/');
             } else {
                 navigate('/login');
             }

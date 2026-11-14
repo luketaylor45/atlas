@@ -7,7 +7,7 @@ import {
     ArrowRight, Zap, Bell, Clock,
     CheckCircle, AlertTriangle
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 
 export default function UserDashboard() {
     const { user } = useAuth();

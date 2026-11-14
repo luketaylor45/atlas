@@ -11,12 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/gin-gonic/gin"
@@ -24,11 +27,14 @@ import (
 	"github.com/luketaylor45/atlas/daemon/internal/config"
 	"github.com/luketaylor45/atlas/daemon/internal/docker"
 	"github.com/luketaylor45/atlas/daemon/internal/installer"
+	"github.com/luketaylor45/atlas/daemon/internal/serverfs"
 )
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+const defaultServerNetwork = "bridge"
 
 type CreateServerRequest struct {
 	UUID             string `json:"uuid"`
@@ -44,7 +50,6 @@ type CreateServerRequest struct {
 }
 
 func CreateServer(c *gin.Context) {
-	// 1. Auth Check (Simple Token Check)
 	token := c.GetHeader("X-Node-Token")
 	if token != config.NodeConfig.NodeToken {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid Token"})
@@ -58,155 +63,153 @@ func CreateServer(c *gin.Context) {
 	}
 
 	log.Printf("Received Create Server Request: %s (%s)", req.UUID, req.EggImage)
+	c.JSON(http.StatusAccepted, gin.H{"status": "provisioning"})
 
-	ctx := context.Background()
+	go func() {
+		NotifyInstallationProgress(req.UUID, "Provisioning queued", 0)
+		if err := provisionServer(context.Background(), req); err != nil {
+			log.Printf("[Daemon] Provisioning FAILED for %s: %v", req.UUID, err)
+			NotifyInstallationFailure(req.UUID, err)
+			dataDir := serverfs.LocalServicePath(req.UUID)
+			_ = serverfs.WriteFile(filepath.Join(dataDir, ".atlas_install_failed"), []byte(err.Error()), 0660)
+		}
+	}()
+}
 
-	// 2. Pull Image
-	// Using a goroutine for non-blocking? For now, blocking is safer to report errors.
-	// Or just trigger it and return "Accepted". "Accepted" is better for long ops.
-	// But for this "vertical slice", let's block or use a background routine but logging carefully.
+func provisionServer(ctx context.Context, req CreateServerRequest) error {
+	dataDir := serverfs.LocalServicePath(req.UUID)
+	if err := serverfs.EnsureServiceDirectory(dataDir); err != nil {
+		return fmt.Errorf("create server data directory: %w", err)
+	}
+	_ = os.Remove(filepath.Join(dataDir, ".atlas_install_failed"))
 
-	log.Printf("Starting pull for image: %s", req.EggImage)
+	log.Printf("[Daemon] Pulling game image %s for %s", req.EggImage, req.UUID)
+	NotifyInstallationProgress(req.UUID, "Pulling game server image", 1)
 	reader, err := docker.Client.ImagePull(ctx, req.EggImage, image.PullOptions{})
 	if err != nil {
-		log.Printf("!! CRITICAL: Failed to pull image: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Docker Error",
-			"details": err.Error(),
-		})
-		return
+		return fmt.Errorf("pull game server image: %w", err)
 	}
-	defer reader.Close()
-	io.Copy(os.Stdout, reader) // Pipe pull output to logs
+	if err := installer.ConsumeImagePull(reader, func(progress int) {
+		NotifyInstallationProgress(req.UUID, fmt.Sprintf("Pulling game server image: %d%%", progress), 1+(progress*9/100))
+	}); err != nil {
+		reader.Close()
+		return err
+	}
+	if err := reader.Close(); err != nil {
+		return fmt.Errorf("close game image pull: %w", err)
+	}
 
-	// 3. Configure Container
+	environment, err := parseEnvironment(req.Environment)
+	if err != nil {
+		return err
+	}
+
+	if req.InstallScript != "" {
+		log.Printf("[Daemon] Starting installation for %s", req.UUID)
+		installImage := req.InstallContainer
+		if installImage == "" {
+			installImage = "ghcr.io/pterodactyl/installers:alpine"
+		}
+
+		inst := installer.New(docker.Client)
+		if err := inst.Install(ctx, req.UUID, installImage, req.InstallScript, environment, func(update installer.ProgressUpdate) {
+			progress := 10 + (update.Progress * 85 / 100)
+			NotifyInstallationProgress(req.UUID, update.Stage, progress)
+		}); err != nil {
+			return err
+		}
+	}
+
+	NotifyInstallationProgress(req.UUID, "Creating game server container", 98)
+	if err := writeStartScript(req.UUID, req.StartupCommand, req.Port, req.Memory, req.Environment, config.NodeConfig.NodeToken); err != nil {
+		return err
+	}
 
 	cPortUDP := nat.Port(fmt.Sprintf("%d/udp", req.Port))
 	cPortTCP := nat.Port(fmt.Sprintf("%d/tcp", req.Port))
-
 	hostConfig := &container.HostConfig{
+		NetworkMode: container.NetworkMode(defaultServerNetwork),
 		PortBindings: nat.PortMap{
 			cPortUDP: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", req.Port)}},
 			cPortTCP: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", req.Port)}},
 		},
 		Resources: container.Resources{
-			// ...
-			Memory:   req.Memory * 1024 * 1024, // MB to Bytes
-			NanoCPUs: req.Cpu * 10000000,       // 100% = 1e9
+			Memory:   req.Memory * 1024 * 1024,
+			NanoCPUs: req.Cpu * 10000000,
 		},
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: filepath.Join(config.NodeConfig.DataPath, req.UUID),
-				Target: "/home/container",
-			},
-		},
+		Mounts: []mount.Mount{{
+			Type:   mount.TypeBind,
+			Source: serverfs.HostServicePath(req.UUID),
+			Target: "/home/container",
+		}},
 	}
 
-	// Ensure data directory exists
-	dataDir := filepath.Join(config.NodeConfig.DataPath, req.UUID)
-	os.MkdirAll(dataDir, 0755)
-
-	// 3. Handle Installation Phase
-	if req.InstallScript != "" {
-		// Set Status to Installing
-		NotifyStatus(req.UUID, "installing")
-
-		go func() {
-			log.Printf("[Daemon] Starting background installation for %s", req.UUID)
-			inst := installer.New(docker.Client)
-
-			installImage := req.InstallContainer
-			if installImage == "" {
-				installImage = "ghcr.io/pterodactyl/installers:alpine" // Better default
-			}
-
-			// Parse env variables
-			var envVars []string
-			if req.Environment != "" {
-				var envMap map[string]string
-				if err := json.Unmarshal([]byte(req.Environment), &envMap); err == nil {
-					for k, v := range envMap {
-						envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
-					}
-				}
-			}
-
-			err := inst.Install(context.Background(), req.UUID, installImage, req.InstallScript, envVars)
-			if err != nil {
-				log.Printf("[Daemon] Installation FAILED for %s: %v", req.UUID, err)
-				NotifyStatus(req.UUID, "installation_failed")
-				os.WriteFile(filepath.Join(dataDir, ".atlas_install_failed"), []byte(err.Error()), 0644)
-				return
-			}
-
-			log.Printf("[Daemon] Installation SUCCEEDED for %s", req.UUID)
-			os.WriteFile(filepath.Join(dataDir, ".atlas_installed"), []byte(time.Now().Format(time.RFC3339)), 0644)
-
-			NotifyStatus(req.UUID, "offline")
-		}()
-	}
-
-	// 4. Write Start Script
-	writeStartScript(req.UUID, req.StartupCommand, req.Port, req.Memory, req.Environment, config.NodeConfig.NodeToken)
-
-	// Determine how the container should reach the Core.
-	containerCoreURL := config.NodeConfig.CoreURL
-	if strings.Contains(containerCoreURL, "localhost") || strings.Contains(containerCoreURL, "127.0.0.1") {
-		containerCoreURL = strings.Replace(containerCoreURL, "localhost", "host.docker.internal", 1)
-		containerCoreURL = strings.Replace(containerCoreURL, "127.0.0.1", "host.docker.internal", 1)
-	}
-
-	env := []string{
+	containerEnvironment := []string{
 		"STARTUP=bash start.sh",
-		"SERVER_MEMORY=" + fmt.Sprintf("%d", req.Memory),
-		"SERVER_PORT=" + fmt.Sprintf("%d", req.Port),
+		fmt.Sprintf("SERVER_MEMORY=%d", req.Memory),
+		fmt.Sprintf("SERVER_PORT=%d", req.Port),
 		"SERVER_UUID=" + req.UUID,
-		"CORE_URL=" + containerCoreURL,
+		"CORE_URL=" + resolveContainerCoreURL(),
 		"NODE_TOKEN=" + config.NodeConfig.NodeToken,
 	}
+	containerEnvironment = append(containerEnvironment, environment...)
 
-	// Parse Egg Environment JSON for actual container env too
-	if req.Environment != "" {
-		var eggEnv map[string]string
-		if err := json.Unmarshal([]byte(req.Environment), &eggEnv); err == nil {
-			for k, v := range eggEnv {
-				env = append(env, fmt.Sprintf("%s=%s", k, v))
-			}
-		}
-	}
-
-	containerConfig := &container.Config{
+	resp, err := docker.Client.ContainerCreate(ctx, &container.Config{
 		Image:     req.EggImage,
 		Tty:       true,
 		OpenStdin: true,
-		Env:       env,
-	}
-
-	log.Printf("[Daemon] Injected Wrapper Script and set STARTUP=bash start.sh")
-
-	// 4. Create Container
-	resp, err := docker.Client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, req.UUID)
+		Env:       containerEnvironment,
+		User:      serverfs.ContainerUser(),
+	}, hostConfig, nil, nil, req.UUID)
 	if err != nil {
-		log.Printf("Failed to create container: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create container: " + err.Error()})
-		return
+		return fmt.Errorf("create game server container: %w", err)
 	}
 
-	// 5. Notify Core that we are ready
-	NotifyStatus(req.UUID, "installing")
-
-	// 6. START THE CONTAINER AUTOMATICALLY (Only if NOT installing)
-	if req.InstallScript == "" {
-		log.Printf("[Daemon] Starting container %s...", resp.ID)
-		if err := docker.Client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-			log.Printf("Failed to start container: %v", err)
+	if req.InstallScript != "" {
+		if err := serverfs.WriteFile(filepath.Join(dataDir, ".atlas_installed"), []byte(time.Now().Format(time.RFC3339)), 0660); err != nil {
+			return fmt.Errorf("write installation marker: %w", err)
 		}
-	} else {
-		log.Printf("[Daemon] Container %s created but waiting for installation to finish.", resp.ID)
+		NotifyInstallationProgress(req.UUID, "Installation complete", 100)
+		NotifyStatus(req.UUID, "offline")
+		log.Printf("[Daemon] Installation SUCCEEDED for %s", req.UUID)
+		return nil
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"container_id": resp.ID})
+	NotifyStatus(req.UUID, "starting")
+	if err := docker.Client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start game server container: %w", err)
+	}
+	return nil
+}
+
+func parseEnvironment(environment string) ([]string, error) {
+	if strings.TrimSpace(environment) == "" {
+		return nil, nil
+	}
+
+	values := make(map[string]string)
+	if err := json.Unmarshal([]byte(environment), &values); err != nil {
+		return nil, fmt.Errorf("parse server environment: %w", err)
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	result := make([]string, 0, len(values))
+	for _, key := range keys {
+		result = append(result, fmt.Sprintf("%s=%s", key, values[key]))
+	}
+	return result, nil
+}
+
+func resolveContainerCoreURL() string {
+	coreURL := config.NodeConfig.CoreURL
+	coreURL = strings.Replace(coreURL, "localhost", "host.docker.internal", 1)
+	coreURL = strings.Replace(coreURL, "127.0.0.1", "host.docker.internal", 1)
+	return coreURL
 }
 
 type UpdateServerRequest struct {
@@ -248,7 +251,10 @@ func UpdateServer(c *gin.Context) {
 	}
 
 	// 2. Regenerate Start Script
-	writeStartScript(uuid, req.StartupCommand, req.Port, int64(req.Memory), req.Environment, config.NodeConfig.NodeToken)
+	if err := writeStartScript(uuid, req.StartupCommand, req.Port, int64(req.Memory), req.Environment, config.NodeConfig.NodeToken); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	// 3. We can't change the Image of a running container without recreating it.
 	// But we can update the record. Recreations should happen on Reinstall or manual rebuild.
@@ -261,10 +267,36 @@ type ReinstallRequest struct {
 	InstallScript    string `json:"install_script"`
 	InstallContainer string `json:"install_container"`
 	Environment      string `json:"environment"`
+	Memory           int64  `json:"memory"`
+	Disk             int64  `json:"disk"`
+	Cpu              int64  `json:"cpu"`
+	Port             int    `json:"port"`
+	EggImage         string `json:"egg_image"`
+	StartupCommand   string `json:"startup_command"`
+}
+
+func (r ReinstallRequest) provisionRequest(uuid string) CreateServerRequest {
+	return CreateServerRequest{
+		UUID:             uuid,
+		Memory:           r.Memory,
+		Disk:             r.Disk,
+		Cpu:              r.Cpu,
+		Port:             r.Port,
+		EggImage:         r.EggImage,
+		StartupCommand:   r.StartupCommand,
+		Environment:      r.Environment,
+		InstallScript:    r.InstallScript,
+		InstallContainer: r.InstallContainer,
+	}
 }
 
 // HandleReinstall wipes game files to trigger a fresh install
 func HandleReinstall(c *gin.Context) {
+	if c.GetHeader("X-Node-Token") != config.NodeConfig.NodeToken {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
 	uuid := c.Param("uuid")
 
 	var req ReinstallRequest
@@ -273,65 +305,69 @@ func HandleReinstall(c *gin.Context) {
 		return
 	}
 
-	ctx := context.Background()
-
-	// 1. Stop container
-	docker.Client.ContainerStop(ctx, uuid, container.StopOptions{})
-
-	// 2. Wipe files except start.sh and steamcmd
-	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
-	files, _ := os.ReadDir(dataDir)
-	for _, f := range files {
-		if f.Name() == "start.sh" || f.Name() == "steamcmd" {
-			continue
-		}
-		os.RemoveAll(filepath.Join(dataDir, f.Name()))
+	if _, err := parseEnvironment(req.Environment); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.EggImage) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing game server image for reinstall"})
+		return
 	}
 
-	// 3. Notify Core
-	NotifyStatus(uuid, "installing")
+	dataDir := serverfs.LocalServicePath(uuid)
+	if err := serverfs.EnsureServiceDirectory(dataDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare server files: " + err.Error()})
+		return
+	}
 
-	// 4. Run Installer
-	go func() {
-		log.Printf("[Daemon] Starting background RE-installation for %s", uuid)
-		inst := installer.New(docker.Client)
+	ctx := context.Background()
 
-		installImage := req.InstallContainer
-		if installImage == "" {
-			installImage = "ghcr.io/pterodactyl/installers:alpine"
+	// Remove the old game container if it exists. A failed first install has no
+	// container yet, which is a valid reinstall starting point.
+	if err := docker.Client.ContainerStop(ctx, uuid, container.StopOptions{}); err != nil && !errdefs.IsNotFound(err) {
+		log.Printf("[Daemon] Reinstall stop warning for %s: %v", uuid, err)
+	}
+	if err := docker.Client.ContainerRemove(ctx, uuid, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to replace existing game container: " + err.Error()})
+		return
+	}
+
+	// Wipe game files and installer caches while preserving Atlas-managed files.
+	files, err := os.ReadDir(dataDir)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read server files: " + err.Error()})
+		return
+	}
+	for _, f := range files {
+		if f.Name() == "start.sh" || f.Name() == ".atlas_permissions_v1" {
+			continue
 		}
-
-		// Parse env variables
-		var envVars []string
-		if req.Environment != "" {
-			var envMap map[string]string
-			if err := json.Unmarshal([]byte(req.Environment), &envMap); err == nil {
-				for k, v := range envMap {
-					envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
-				}
-			}
-		}
-
-		err := inst.Install(context.Background(), uuid, installImage, req.InstallScript, envVars)
-		if err != nil {
-			log.Printf("[Daemon] Re-installation FAILED for %s: %v", uuid, err)
-			NotifyStatus(uuid, "installation_failed")
-			os.WriteFile(filepath.Join(dataDir, ".atlas_install_failed"), []byte(err.Error()), 0644)
+		if err := os.RemoveAll(filepath.Join(dataDir, f.Name())); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove server files: " + err.Error()})
 			return
 		}
+	}
 
-		log.Printf("[Daemon] Re-installation SUCCEEDED for %s", uuid)
-		os.WriteFile(filepath.Join(dataDir, ".atlas_installed"), []byte(time.Now().Format(time.RFC3339)), 0644)
+	NotifyInstallationProgress(uuid, "Reinstallation queued", 0)
 
-		NotifyStatus(uuid, "offline")
+	provisionReq := req.provisionRequest(uuid)
+	go func() {
+		log.Printf("[Daemon] Starting background re-provisioning for %s", uuid)
+		if err := provisionServer(context.Background(), provisionReq); err != nil {
+			log.Printf("[Daemon] Re-provisioning FAILED for %s: %v", uuid, err)
+			NotifyInstallationFailure(uuid, err)
+			_ = serverfs.WriteFile(filepath.Join(dataDir, ".atlas_install_failed"), []byte(err.Error()), 0660)
+		}
 	}()
 
-	c.JSON(http.StatusOK, gin.H{"status": "reinstall_triggered"})
+	c.JSON(http.StatusAccepted, gin.H{"status": "reinstall_triggered"})
 }
 
-func writeStartScript(uuid string, startupCmd string, port int, memory int64, environment string, nodeToken string) {
-	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
-	os.MkdirAll(dataDir, 0755)
+func writeStartScript(uuid string, startupCmd string, port int, memory int64, environment string, nodeToken string) error {
+	dataDir := serverfs.LocalServicePath(uuid)
+	if err := serverfs.EnsureDirectory(dataDir); err != nil {
+		return fmt.Errorf("prepare startup script directory: %w", err)
+	}
 
 	// Create a map for all available replacements
 	replacements := map[string]string{
@@ -378,16 +414,29 @@ cd "/home/container"
 
 # Run the startup command directly
 %s
+exit_code=$?
+
+if [ $exit_code -eq 0 ]; then
+  curl -X POST "${CORE_URL}/api/v1/internal/services/${SERVER_UUID}/status" -H "Content-Type: application/json" -d "{\"status\":\"offline\", \"token\": \"${NODE_TOKEN}\"}" > /dev/null 2>&1
+else
+  echo "[Atlas] Server process exited unexpectedly with code $exit_code"
+  curl -X POST "${CORE_URL}/api/v1/internal/services/${SERVER_UUID}/status" -H "Content-Type: application/json" -d "{\"status\":\"offline\", \"token\": \"${NODE_TOKEN}\"}" > /dev/null 2>&1
+fi
+
+exit $exit_code
 `, port, memory, processedCmd)
 
 	// Normalize line endings for Linux
 	startScript = strings.ReplaceAll(startScript, "\r\n", "\n")
 
-	os.WriteFile(filepath.Join(dataDir, "start.sh"), []byte(startScript), 0755)
+	if err := serverfs.WriteFile(filepath.Join(dataDir, "start.sh"), []byte(startScript), 0770); err != nil {
+		return fmt.Errorf("write startup script: %w", err)
+	}
+	return nil
 }
 
 func writeInstallScript(uuid string, installScript string, environment string) {
-	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
+	dataDir := serverfs.LocalServicePath(uuid)
 
 	// Replace placeholders in install script too
 	if environment != "" {
@@ -402,7 +451,9 @@ func writeInstallScript(uuid string, installScript string, environment string) {
 	// Normalize line endings for Linux
 	installScript = strings.ReplaceAll(installScript, "\r\n", "\n")
 
-	os.WriteFile(filepath.Join(dataDir, "install.sh"), []byte(installScript), 0755)
+	if err := serverfs.WriteFile(filepath.Join(dataDir, "install.sh"), []byte(installScript), 0770); err != nil {
+		log.Printf("[Daemon] Failed to write install script for %s: %v", uuid, err)
+	}
 }
 
 type PowerActionRequest struct {
@@ -411,6 +462,75 @@ type PowerActionRequest struct {
 	Environment    string `json:"environment"`
 	Port           int    `json:"port"`
 	Memory         int64  `json:"memory"`
+}
+
+func powerActionErrorMessage(action string, port int, err error) string {
+	detail := strings.TrimSpace(err.Error())
+	prefix := fmt.Sprintf("Failed to %s server container", action)
+	lowerDetail := strings.ToLower(detail)
+
+	switch {
+	case errdefs.IsNotFound(err):
+		return prefix + ": the game container does not exist. Reinstall the service to recreate it. Docker: " + detail
+	case strings.Contains(lowerDetail, "port is already allocated") || strings.Contains(lowerDetail, "address already in use"):
+		return fmt.Sprintf("%s: host port %d is already in use. Stop the conflicting container, or assign this service a unique port and reinstall it to rebuild the Docker mapping. Docker: %s", prefix, port, detail)
+	case strings.Contains(lowerDetail, "bind source path does not exist"):
+		return prefix + ": the game data bind path does not exist on the Docker host. Check DATA_PATH/HOST_DATA_PATH. Docker: " + detail
+	case strings.Contains(lowerDetail, "permission denied"):
+		return prefix + ": Docker was denied access to the game files. Check DATA_PATH and SERVER_UID/SERVER_GID. Docker: " + detail
+	default:
+		return prefix + ": " + detail
+	}
+}
+
+func reconcileStatusAfterPowerFailure(ctx context.Context, uuid string) {
+	status := "offline"
+	inspect, err := docker.Client.ContainerInspect(ctx, uuid)
+	if err == nil && inspect.State != nil && inspect.State.Running {
+		status = "running"
+	} else if err != nil && !errdefs.IsNotFound(err) {
+		log.Printf("[Daemon] Failed to inspect %s after power action failure: %v", uuid, err)
+	}
+	NotifyStatus(uuid, status)
+}
+
+func containerHasNetwork(networks map[string]*network.EndpointSettings, networkName string) bool {
+	endpoint, ok := networks[networkName]
+	return ok && endpoint != nil && endpoint.NetworkID != ""
+}
+
+func ensureContainerNetwork(ctx context.Context, uuid string) (bool, error) {
+	inspect, err := docker.Client.ContainerInspect(ctx, uuid)
+	if err != nil {
+		return false, fmt.Errorf("inspect server container network: %w", err)
+	}
+	if inspect.NetworkSettings != nil && containerHasNetwork(inspect.NetworkSettings.Networks, defaultServerNetwork) {
+		return false, nil
+	}
+
+	// A running legacy container can still hold its published host ports even
+	// without a usable endpoint. Stop it before Docker programs the new bridge.
+	if inspect.State != nil && inspect.State.Running {
+		log.Printf("[Daemon] Stopping container %s before repairing its Docker network", uuid)
+		timeout := 10
+		if err := docker.Client.ContainerStop(ctx, uuid, container.StopOptions{Timeout: &timeout}); err != nil {
+			return false, fmt.Errorf("stop server container before network repair: %w", err)
+		}
+	}
+
+	log.Printf("[Daemon] Container %s has no %s endpoint; attaching it before start", uuid, defaultServerNetwork)
+	if err := docker.Client.NetworkConnect(ctx, defaultServerNetwork, uuid, &network.EndpointSettings{}); err != nil {
+		return false, fmt.Errorf("attach server container to Docker %s network: %w", defaultServerNetwork, err)
+	}
+
+	inspect, err = docker.Client.ContainerInspect(ctx, uuid)
+	if err != nil {
+		return false, fmt.Errorf("verify server container network: %w", err)
+	}
+	if inspect.NetworkSettings == nil || !containerHasNetwork(inspect.NetworkSettings.Networks, defaultServerNetwork) {
+		return false, fmt.Errorf("Docker did not create a %s network endpoint for the server container", defaultServerNetwork)
+	}
+	return true, nil
 }
 
 func HandlePowerAction(c *gin.Context) {
@@ -432,23 +552,37 @@ func HandlePowerAction(c *gin.Context) {
 	// Re-write start script if we have the data
 	if req.StartupCommand != "" {
 		log.Printf("[Daemon] Regenerating start.sh for %s", uuid)
-		writeStartScript(uuid, req.StartupCommand, req.Port, req.Memory, req.Environment, config.NodeConfig.NodeToken)
+		if err := writeStartScript(uuid, req.StartupCommand, req.Port, req.Memory, req.Environment, config.NodeConfig.NodeToken); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	ctx := context.Background()
 	var err error
 	switch req.Action {
 	case "start":
-		NotifyStatus(uuid, "starting")
-		err = docker.Client.ContainerStart(ctx, uuid, container.StartOptions{})
+		_, err = ensureContainerNetwork(ctx, uuid)
+		if err == nil {
+			NotifyStatus(uuid, "starting")
+			err = docker.Client.ContainerStart(ctx, uuid, container.StartOptions{})
+		}
 	case "stop":
 		NotifyStatus(uuid, "stopping")
 		timeout := 10
 		err = docker.Client.ContainerStop(ctx, uuid, container.StopOptions{Timeout: &timeout})
 	case "restart":
-		NotifyStatus(uuid, "starting")
-		timeout := 10
-		err = docker.Client.ContainerRestart(ctx, uuid, container.StopOptions{Timeout: &timeout})
+		var networkRepaired bool
+		networkRepaired, err = ensureContainerNetwork(ctx, uuid)
+		if err == nil {
+			NotifyStatus(uuid, "starting")
+			if networkRepaired {
+				err = docker.Client.ContainerStart(ctx, uuid, container.StartOptions{})
+			} else {
+				timeout := 10
+				err = docker.Client.ContainerRestart(ctx, uuid, container.StopOptions{Timeout: &timeout})
+			}
+		}
 	case "kill":
 		NotifyStatus(uuid, "offline")
 		err = docker.Client.ContainerKill(ctx, uuid, "SIGKILL")
@@ -458,7 +592,10 @@ func HandlePowerAction(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		errorMessage := powerActionErrorMessage(req.Action, req.Port, err)
+		log.Printf("[Daemon] Power action failed for %s: %s", uuid, errorMessage)
+		reconcileStatusAfterPowerFailure(ctx, uuid)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errorMessage})
 		return
 	}
 
@@ -482,7 +619,7 @@ func HandleConsole(c *gin.Context) {
 	inspect, err := docker.Client.ContainerInspect(ctx, uuid)
 	if err != nil {
 		log.Printf("[Daemon] Failed to inspect container %s: %v", uuid, err)
-		conn.WriteMessage(websocket.TextMessage, []byte("[Atlas] Error: Container not found or inaccessible."))
+		conn.WriteMessage(websocket.TextMessage, []byte(consoleUnavailableMessage(uuid, err)))
 		return
 	}
 
@@ -550,6 +687,25 @@ func HandleConsole(c *gin.Context) {
 			log.Printf("[Daemon] Console scanner error for %s (Non-TTY): %v", uuid, err)
 		}
 	}
+}
+
+func consoleUnavailableMessage(uuid string, inspectErr error) string {
+	if !errdefs.IsNotFound(inspectErr) {
+		return "[Atlas] Error: Container is inaccessible: " + inspectErr.Error()
+	}
+
+	failureMarker := filepath.Join(serverfs.LocalServicePath(uuid), ".atlas_install_failed")
+	if failure, err := os.ReadFile(failureMarker); err == nil {
+		details := strings.TrimSpace(string(failure))
+		if len(details) > 2000 {
+			details = details[:2000] + "..."
+		}
+		if details != "" {
+			return "[Atlas] Installation failed before the game container was created: " + details
+		}
+	}
+
+	return "[Atlas] The game container has not been created yet. Installation may still be in progress."
 }
 
 func HandleStats(c *gin.Context) {
@@ -688,7 +844,7 @@ func DeleteServer(c *gin.Context) {
 	}
 
 	// 2. Remove data directory
-	dataDir := filepath.Join(config.NodeConfig.DataPath, uuid)
+	dataDir := serverfs.LocalServicePath(uuid)
 	if err := os.RemoveAll(dataDir); err != nil {
 		log.Printf("[Daemon] Error cleaning up directory %s: %v", dataDir, err)
 	}

@@ -42,6 +42,7 @@ type Service struct {
 	InstallationStage    string `gorm:"size:255;default:''" json:"installation_stage"`
 	InstallationProgress int    `gorm:"default:0" json:"installation_progress"`
 
+	StartupCommand string `gorm:"type:text" json:"startup_command"`
 	Environment    string `gorm:"type:text" json:"environment"`     // JSON string of overrides
 	VariableValues string `gorm:"type:text" json:"variable_values"` // JSON key-value pair of variable values
 

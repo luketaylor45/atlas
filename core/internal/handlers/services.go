@@ -4,14 +4,35 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
 	"github.com/luketaylor45/atlas/core/internal/utils"
 )
+
+func resolveStartupCommand(service *models.Service) string {
+	if service.StartupCommand != "" {
+		return service.StartupCommand
+	}
+	return service.Egg.StartupCommand
+}
+
+func nodeErrorMessage(body io.Reader, fallback string) string {
+	var daemonErr struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 64*1024)).Decode(&daemonErr); err == nil {
+		if message := strings.TrimSpace(daemonErr.Error); message != "" {
+			return message
+		}
+	}
+	return fallback
+}
 
 // GetUserOverview returns statistics for the user dashboard
 func GetUserOverview(c *gin.Context) {
@@ -162,13 +183,13 @@ func ServicePowerAction(c *gin.Context) {
 		Port           int    `json:"port"`
 	}{
 		Action:         req.Action,
-		StartupCommand: service.Egg.StartupCommand,
+		StartupCommand: resolveStartupCommand(service),
 		Environment:    string(finalEnvJSON),
 		Memory:         service.Memory,
 		Port:           service.Port,
 	}
 
-	log.Printf("[Core] Sending Power Action '%s' to Node %s (Service: %s). Env: %s", req.Action, service.Node.Name, service.UUID, payloadObj.Environment)
+	log.Printf("[Core] Sending Power Action '%s' to Node %s (Service: %s). Env count: %d", req.Action, service.Node.Name, service.UUID, len(mergedEnv))
 
 	payload, _ := json.Marshal(payloadObj)
 	client := &http.Client{}
@@ -184,7 +205,8 @@ func ServicePowerAction(c *gin.Context) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		c.JSON(resp.StatusCode, gin.H{"error": "Node responded with error"})
+		fallback := fmt.Sprintf("Node returned HTTP %d during power action", resp.StatusCode)
+		c.JSON(resp.StatusCode, gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
 		return
 	}
 
@@ -273,11 +295,24 @@ func ServiceReinstall(c *gin.Context) {
 		}
 	}
 	finalEnvJSON, _ := json.Marshal(mergedEnv)
+	eggImage := service.DockerImage
+	if eggImage == "" {
+		var images []string
+		if err := json.Unmarshal([]byte(service.Egg.DockerImages), &images); err == nil && len(images) > 0 {
+			eggImage = images[0]
+		}
+	}
 
 	payload := map[string]interface{}{
 		"install_script":    service.Egg.ScriptInstall,
 		"install_container": service.Egg.ScriptContainer,
 		"environment":       string(finalEnvJSON),
+		"memory":            service.Memory,
+		"disk":              service.Disk,
+		"cpu":               service.Cpu,
+		"port":              service.Port,
+		"egg_image":         eggImage,
+		"startup_command":   service.StartupCommand,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -294,7 +329,16 @@ func ServiceReinstall(c *gin.Context) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		c.JSON(resp.StatusCode, gin.H{"error": "Node returned error during reinstall trigger"})
+		c.JSON(resp.StatusCode, gin.H{"error": nodeErrorMessage(resp.Body, "Node returned error during reinstall trigger")})
+		return
+	}
+
+	if err := database.DB.Model(service).Updates(map[string]interface{}{
+		"status":                "installing",
+		"installation_stage":    "Reinstallation queued",
+		"installation_progress": 0,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Reinstall started, but service status could not be updated"})
 		return
 	}
 
@@ -307,7 +351,8 @@ func UpdateServiceEnvironment(c *gin.Context) {
 	uuid := c.Param("uuid")
 
 	var req struct {
-		Environment string `json:"environment"`
+		StartupCommand string `json:"startup_command"`
+		Environment    string `json:"environment"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -326,13 +371,53 @@ func UpdateServiceEnvironment(c *gin.Context) {
 		return
 	}
 
+	updates := map[string]interface{}{
+		"environment": req.Environment,
+	}
+	if req.StartupCommand != "" {
+		updates["startup_command"] = req.StartupCommand
+		service.StartupCommand = req.StartupCommand
+	}
 	service.Environment = req.Environment
-	if err := database.DB.Save(&service).Error; err != nil {
+	if err := database.DB.Model(&models.Service{}).Where("id = ?", service.ID).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update environment"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "success"})
+	url := fmt.Sprintf("http://%s:%s/api/servers/%s", service.Node.Address, service.Node.Port, service.UUID)
+	payload := map[string]interface{}{
+		"memory":          service.Memory,
+		"disk":            service.Disk,
+		"cpu":             service.Cpu,
+		"port":            service.Port,
+		"docker_image":    service.DockerImage,
+		"startup_command": resolveStartupCommand(service),
+		"environment":     service.Environment,
+	}
+	body, _ := json.Marshal(payload)
+
+	client := &http.Client{}
+	proxyReq, _ := http.NewRequest("PUT", url, bytes.NewBuffer(body))
+	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
+	proxyReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(proxyReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Saved configuration, but failed to update node"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		c.JSON(resp.StatusCode, gin.H{"error": "Saved configuration, but node rejected the update"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":          "success",
+		"startup_command": service.StartupCommand,
+		"environment":     service.Environment,
+	})
 }
 
 // ServiceListFiles proxies a file list request to the node
@@ -463,6 +548,59 @@ func ServiceCreateFolder(c *gin.Context) {
 	defer resp.Body.Close()
 
 	c.JSON(resp.StatusCode, gin.H{"status": "success"})
+}
+
+func ServiceExtractArchive(c *gin.Context) {
+	userID := c.MustGet("user_id").(uint)
+	uuid := c.Param("uuid")
+
+	var extractRequest struct {
+		Path string `json:"path" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&extractRequest); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A ZIP archive path is required"})
+		return
+	}
+
+	service, subUser, ok := utils.FindServiceForUser(uuid, userID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found or no access"})
+		return
+	}
+	if subUser != nil && !subUser.CanManageFiles {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to manage files for this server"})
+		return
+	}
+
+	payload, err := json.Marshal(extractRequest)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare extraction request"})
+		return
+	}
+	url := fmt.Sprintf("http://%s:%s/api/servers/%s/files/extract", service.Node.Address, service.Node.Port, service.UUID)
+	proxyRequest, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare node request"})
+		return
+	}
+	proxyRequest.Header.Set("X-Node-Token", service.Node.Token)
+	proxyRequest.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{}).Do(proxyRequest)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		fallback := fmt.Sprintf("Node returned HTTP %d while extracting the archive", resp.StatusCode)
+		c.JSON(resp.StatusCode, gin.H{"error": nodeErrorMessage(resp.Body, fallback)})
+		return
+	}
+
+	utils.LogActivity(c, service.ID, "file_extract", extractRequest.Path, "Extracted ZIP archive", nil)
+	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
 }
 
 func ServiceDeleteFile(c *gin.Context) {

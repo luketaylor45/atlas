@@ -18,15 +18,37 @@ type ImportEggRequest struct {
 // GetEggs returns all eggs
 func GetEggs(c *gin.Context) {
 	var eggs []models.Egg
-	database.DB.Preload("Nest.Parent").Preload("Variables").Find(&eggs)
+	database.DB.Where("available = ?", true).Preload("Nest.Parent").Preload("Variables").Find(&eggs)
 	c.JSON(http.StatusOK, eggs)
 }
 
 // GetNests returns all nests
 func GetNests(c *gin.Context) {
 	var nests []models.Nest
-	database.DB.Preload("SubNests").Preload("SubNests.Eggs.Variables").Preload("Eggs.Variables").Find(&nests)
-	c.JSON(http.StatusOK, nests)
+	database.DB.
+		Preload("SubNests").
+		Preload("SubNests.Eggs", "available = ?", true).
+		Preload("SubNests.Eggs.Variables").
+		Preload("Eggs", "available = ?", true).
+		Preload("Eggs.Variables").
+		Find(&nests)
+
+	visible := make([]models.Nest, 0, len(nests))
+	for _, nest := range nests {
+		subNests := make([]models.Nest, 0, len(nest.SubNests))
+		for _, subNest := range nest.SubNests {
+			if len(subNest.Eggs) > 0 {
+				subNests = append(subNests, subNest)
+			}
+		}
+		nest.SubNests = subNests
+
+		if len(nest.Eggs) > 0 || len(nest.SubNests) > 0 {
+			visible = append(visible, nest)
+		}
+	}
+
+	c.JSON(http.StatusOK, visible)
 }
 
 // CreateNest creates a new nest
@@ -107,6 +129,7 @@ func ImportEgg(c *gin.Context) {
 		egg := models.Egg{
 			UUID:            uuid.New().String(),
 			NestID:          nest.ID,
+			Available:       true,
 			Name:            atlasJSON.Name,
 			Description:     atlasJSON.Description,
 			DockerImages:    string(dockerImagesJSON),
@@ -183,6 +206,7 @@ func ImportEgg(c *gin.Context) {
 	egg := models.Egg{
 		UUID:            uuid.New().String(),
 		NestID:          nest.ID,
+		Available:       true,
 		Name:            ptEgg.Name,
 		Description:     ptEgg.Description,
 		DockerImages:    string(imagesJSON),

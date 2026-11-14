@@ -87,6 +87,7 @@ func Setup(r *gin.Engine) {
 			services.GET("/:uuid/files/content", handlers.ServiceGetFileContent)
 			services.POST("/:uuid/files/write", handlers.ServiceWriteFile)
 			services.POST("/:uuid/files/create-folder", handlers.ServiceCreateFolder)
+			services.POST("/:uuid/files/extract", handlers.ServiceExtractArchive)
 			services.POST("/:uuid/files/upload", handlers.ServiceUploadFile)
 			services.DELETE("/:uuid/files", handlers.ServiceDeleteFile)
 

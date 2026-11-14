@@ -30,6 +30,7 @@ type Egg struct {
 	UUID        string `gorm:"uniqueIndex;size:36;not null" json:"uuid"`
 	NestID      uint   `gorm:"not null" json:"nest_id"`
 	Nest        Nest   `json:"nest" gorm:"foreignKey:NestID"`
+	Available   bool   `gorm:"default:true;index" json:"available"`
 	Author      string `gorm:"size:255;not null" json:"author"`
 	Name        string `gorm:"size:255;not null" json:"name"`
 	Description string `gorm:"type:text" json:"description"`

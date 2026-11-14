@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 import { User, Shield, Lock, Bell, Terminal, Palette, Globe } from 'lucide-react';
 import clsx from 'clsx';
 

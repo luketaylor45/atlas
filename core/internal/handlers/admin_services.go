@@ -63,6 +63,33 @@ func checkNodeResources(nodeID uint, reqMem, reqDisk uint64, excludeServiceID ui
 	return nil
 }
 
+func validateServicePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func checkNodePortAvailable(nodeID uint, port int, excludeServiceID uint) error {
+	if err := validateServicePort(port); err != nil {
+		return err
+	}
+
+	query := database.DB.Model(&models.Service{}).Where("node_id = ? AND port = ?", nodeID, port)
+	if excludeServiceID > 0 {
+		query = query.Where("id != ?", excludeServiceID)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to validate port availability")
+	}
+	if count > 0 {
+		return fmt.Errorf("port %d is already assigned to another service on this node", port)
+	}
+	return nil
+}
+
 // GetServices returns all services with their relations
 func GetServices(c *gin.Context) {
 	var services []models.Service
@@ -88,6 +115,11 @@ func CreateService(c *gin.Context) {
 		return
 	}
 
+	if err := checkNodePortAvailable(req.NodeID, req.Port, 0); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	// 1.5 Check Resources
 	if err := checkNodeResources(req.NodeID, req.Memory, req.Disk, 0); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -96,7 +128,7 @@ func CreateService(c *gin.Context) {
 
 	// 2. Fetch Egg
 	var egg models.Egg
-	if err := database.DB.Preload("Variables").First(&egg, req.EggID).Error; err != nil {
+	if err := database.DB.Preload("Variables").Where("available = ?", true).First(&egg, req.EggID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Service type not found"})
 		return
 	}
@@ -118,17 +150,21 @@ func CreateService(c *gin.Context) {
 
 	// 3. Create Service Record
 	service := models.Service{
-		UUID:        uuid.New().String(),
-		Name:        req.Name,
-		UserID:      req.UserID,
-		NodeID:      req.NodeID,
-		EggID:       req.EggID,
-		Memory:      req.Memory,
-		Disk:        req.Disk,
-		Cpu:         req.Cpu,
-		Port:        req.Port,
-		Environment: req.Environment,
-		DockerImage: req.DockerImage,
+		UUID:                 uuid.New().String(),
+		Name:                 req.Name,
+		UserID:               req.UserID,
+		NodeID:               req.NodeID,
+		EggID:                req.EggID,
+		Memory:               req.Memory,
+		Disk:                 req.Disk,
+		Cpu:                  req.Cpu,
+		Port:                 req.Port,
+		StartupCommand:       egg.StartupCommand,
+		Environment:          req.Environment,
+		DockerImage:          req.DockerImage,
+		Status:               "installing",
+		InstallationStage:    "Provisioning queued",
+		InstallationProgress: 0,
 	}
 
 	// Default to first image if none selected
@@ -176,7 +212,7 @@ func notifyDaemon(node *models.Node, service *models.Service, egg *models.Egg) e
 		"cpu":               service.Cpu,
 		"port":              service.Port,
 		"egg_image":         eggImage,
-		"startup_command":   egg.StartupCommand,
+		"startup_command":   service.StartupCommand,
 		"environment":       service.Environment, // Use service overrides
 		"install_script":    egg.ScriptInstall,
 		"install_container": egg.ScriptContainer,
@@ -323,7 +359,7 @@ func notifyDaemonUpdate(node *models.Node, service *models.Service, egg *models.
 		"cpu":             service.Cpu,
 		"port":            service.Port,
 		"docker_image":    service.DockerImage,
-		"startup_command": egg.StartupCommand,
+		"startup_command": service.StartupCommand,
 		"environment":     service.Environment,
 	}
 

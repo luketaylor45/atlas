@@ -12,7 +12,7 @@ type ServiceStatusRequest struct {
 	Token    string `json:"token" binding:"required"`
 	Status   string `json:"status" binding:"required"`
 	Stage    string `json:"stage"`
-	Progress int    `json:"progress"`
+	Progress *int   `json:"progress"`
 }
 
 func HandleServerStatusUpdate(c *gin.Context) {
@@ -37,12 +37,21 @@ func HandleServerStatusUpdate(c *gin.Context) {
 	if req.Stage != "" {
 		updates["installation_stage"] = req.Stage
 	}
-	if req.Progress > 0 {
-		updates["installation_progress"] = req.Progress
+	if req.Progress != nil {
+		if *req.Progress < 0 || *req.Progress > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Progress must be between 0 and 100"})
+			return
+		}
+		updates["installation_progress"] = *req.Progress
 	}
 
-	if err := database.DB.Model(&models.Service{}).Where("uuid = ?", uuid).Updates(updates).Error; err != nil {
+	result := database.DB.Model(&models.Service{}).Where("uuid = ? AND node_id = ?", uuid, node.ID).Updates(updates)
+	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update status"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found on this node"})
 		return
 	}
 

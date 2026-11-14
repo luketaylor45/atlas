@@ -1,64 +1,105 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-// import api from '../lib/api'; // Not strictly needed here unless we validate token with API call on load
+import { useState, useEffect, type ReactNode } from 'react';
+import {
+    AUTH_SESSION_EXPIRED_EVENT,
+    clearStoredAuth,
+    getStoredAuth,
+    storeAuth,
+} from '../lib/authSession';
+import { AuthContext, type User } from './auth';
 
-interface User {
-    id: number;
-    username: string;
-    is_admin: boolean;
+function getTokenExpiry(token: string): number | null {
+    try {
+        const encodedPayload = token.split('.')[1];
+        if (!encodedPayload) return null;
+
+        const normalized = encodedPayload
+            .replace(/-/g, '+')
+            .replace(/_/g, '/')
+            .padEnd(Math.ceil(encodedPayload.length / 4) * 4, '=');
+        const payload = JSON.parse(atob(normalized));
+        return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+    } catch {
+        return null;
+    }
 }
 
-interface AuthContextType {
+interface AuthState {
     user: User | null;
     token: string | null;
-    loading: boolean;
-    login: (token: string, user: User) => void;
-    logout: () => void;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+function readStoredAuth(): AuthState {
+    const storedAuth = getStoredAuth();
+    if (!storedAuth) {
+        clearStoredAuth();
+        return { user: null, token: null };
+    }
+
+    try {
+        const expiry = getTokenExpiry(storedAuth.token);
+        if (expiry !== null && expiry <= Date.now()) {
+            clearStoredAuth();
+            return { user: null, token: null };
+        }
+        return { user: JSON.parse(storedAuth.user), token: storedAuth.token };
+    } catch {
+        clearStoredAuth();
+        return { user: null, token: null };
+    }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-    const [user, setUser] = useState<User | null>(null);
-    const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
-    const [loading, setLoading] = useState(true);
+    const [auth, setAuth] = useState<AuthState>(readStoredAuth);
+    const { user, token } = auth;
 
     useEffect(() => {
-        // Hydrate user from local storage or validate token
-        const storedToken = localStorage.getItem('token');
-        const storedUser = localStorage.getItem('user');
+        const clearAuthState = () => {
+            setAuth({ user: null, token: null });
+        };
+        const handleStorage = (event: StorageEvent) => {
+            if ((event.key === 'token' || event.key === 'user') && event.newValue === null) {
+                if (!getStoredAuth()) {
+                    clearAuthState();
+                }
+            }
+        };
 
-        if (storedToken && storedUser) {
-            setToken(storedToken);
-            setUser(JSON.parse(storedUser));
-        }
-        setLoading(false);
+        window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, clearAuthState);
+        window.addEventListener('storage', handleStorage);
+        return () => {
+            window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, clearAuthState);
+            window.removeEventListener('storage', handleStorage);
+        };
     }, []);
 
-    const login = (newToken: string, newUser: User) => {
-        localStorage.setItem('token', newToken);
-        localStorage.setItem('user', JSON.stringify(newUser));
-        setToken(newToken);
-        setUser(newUser);
+    useEffect(() => {
+        if (!token) return;
+
+        const expiry = getTokenExpiry(token);
+        if (expiry === null) return;
+
+        const expire = () => {
+            clearStoredAuth();
+            setAuth({ user: null, token: null });
+        };
+        const remaining = expiry - Date.now();
+        const timer = window.setTimeout(expire, Math.max(remaining, 0));
+        return () => window.clearTimeout(timer);
+    }, [token]);
+
+    const login = (newToken: string, newUser: User, remember = true) => {
+        storeAuth(newToken, JSON.stringify(newUser), remember);
+        setAuth({ token: newToken, user: newUser });
     };
 
     const logout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        setToken(null);
-        setUser(null);
+        clearStoredAuth();
+        setAuth({ user: null, token: null });
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, loading, login, logout }}>
+        <AuthContext.Provider value={{ user, token, loading: false, login, logout }}>
             {children}
         </AuthContext.Provider>
     );
-}
-
-export function useAuth() {
-    const context = useContext(AuthContext);
-    if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
-    return context;
 }

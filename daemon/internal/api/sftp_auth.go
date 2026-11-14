@@ -45,8 +45,7 @@ func ValidateSFTPCredentials(username, password string) (bool, string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Node-Token", config.NodeConfig.NodeToken)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := coreHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[SFTP-Auth] Failed to contact Core: %v", err)
 		return false, ""
@@ -54,6 +53,7 @@ func ValidateSFTPCredentials(username, password string) (bool, string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return false, ""
 	}
 

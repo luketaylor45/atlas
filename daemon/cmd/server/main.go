@@ -9,12 +9,19 @@ import (
 	"github.com/luketaylor45/atlas/daemon/internal/api"
 	"github.com/luketaylor45/atlas/daemon/internal/config"
 	"github.com/luketaylor45/atlas/daemon/internal/docker"
+	"github.com/luketaylor45/atlas/daemon/internal/serverfs"
 	"github.com/luketaylor45/atlas/daemon/internal/sftp"
 )
 
 func main() {
 	log.Println("[DEBUG] Loading configuration...")
 	config.LoadConfig()
+	serverfs.ConfigureProcessPermissions()
+
+	log.Printf("[DEBUG] Repairing server storage permissions for %s...", config.NodeConfig.DataPath)
+	if err := serverfs.RepairExistingServices(config.NodeConfig.DataPath); err != nil {
+		log.Printf("[WARN] Some server storage permissions could not be repaired: %v", err)
+	}
 
 	log.Println("[DEBUG] Initializing Docker client...")
 	docker.Init()
@@ -25,7 +32,7 @@ func main() {
 	// Start SFTP Server
 	log.Println("[DEBUG] Starting SFTP subsystem...")
 	sftp.SetAuthValidator(api.ValidateSFTPCredentials)
-	sftpServer := sftp.NewServer(config.NodeConfig.SFTPPort, "C:\\AtlasData")
+	sftpServer := sftp.NewServer(config.NodeConfig.SFTPPort, config.NodeConfig.DataPath)
 	if err := sftpServer.Start(); err != nil {
 		log.Printf("[WARN] SFTP Server failed to start: %v", err)
 	} else {
@@ -69,6 +76,7 @@ func main() {
 	r.GET("/api/servers/:uuid/files/content", api.GetFileContent)
 	r.POST("/api/servers/:uuid/files/write", api.WriteFile)
 	r.POST("/api/servers/:uuid/files/create-folder", api.CreateFolder)
+	r.POST("/api/servers/:uuid/files/extract", api.ExtractArchive)
 	r.POST("/api/servers/:uuid/files/upload", api.UploadFile)
 	r.DELETE("/api/servers/:uuid/files", api.DeleteFile)
 

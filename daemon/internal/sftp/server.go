@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/luketaylor45/atlas/daemon/internal/config"
+	"github.com/luketaylor45/atlas/daemon/internal/serverfs"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -56,12 +57,16 @@ func (s *SFTPServer) Start() error {
 			// Try user-based authentication first (via Core API)
 			if authCallback != nil {
 				if valid, uuid := authCallback(username, password); valid {
+					uuid = strings.TrimSpace(uuid)
 					log.Printf("[SFTP] ✓ User Authenticated: %s (Service: %s)", username, uuid)
 
 					// Verify service directory exists
 					serviceDir := filepath.Join(s.DataDir, uuid)
-					if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
-						log.Printf("[SFTP] Service directory not found: %s", uuid)
+					if _, err := os.Stat(serviceDir); err != nil {
+						log.Printf("[SFTP] Service directory check failed: uuid=%q path=%q err=%v", uuid, serviceDir, err)
+						if os.IsNotExist(err) {
+							log.Printf("[SFTP] Service directory not found: %s", uuid)
+						}
 						return nil, fmt.Errorf("service not found")
 					}
 
@@ -76,10 +81,13 @@ func (s *SFTPServer) Start() error {
 
 			// Fallback: Legacy format service_<UUID> with node token
 			if strings.HasPrefix(username, "service_") && password == config.NodeConfig.NodeToken {
-				uuid := strings.TrimPrefix(username, "service_")
+				uuid := strings.TrimSpace(strings.TrimPrefix(username, "service_"))
 				serviceDir := filepath.Join(s.DataDir, uuid)
-				if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
-					log.Printf("[SFTP] Service directory not found: %s", uuid)
+				if _, err := os.Stat(serviceDir); err != nil {
+					log.Printf("[SFTP] Service directory check failed: uuid=%q path=%q err=%v", uuid, serviceDir, err)
+					if os.IsNotExist(err) {
+						log.Printf("[SFTP] Service directory not found: %s", uuid)
+					}
 					return nil, fmt.Errorf("service not found")
 				}
 
@@ -138,6 +146,15 @@ func (s *SFTPServer) handleConnection(netConn net.Conn, config *ssh.ServerConfig
 	uuid := sshConn.Permissions.Extensions["uuid"]
 	username := sshConn.Permissions.Extensions["username"]
 	serviceRoot := filepath.Join(s.DataDir, uuid)
+	if err := serverfs.RepairServiceDirectory(serviceRoot); err != nil {
+		log.Printf("[SFTP] Failed to prepare service permissions for %s: %v", uuid, err)
+		return
+	}
+	defer func() {
+		if err := serverfs.NormalizeTree(serviceRoot); err != nil {
+			log.Printf("[SFTP] Failed to normalize uploaded files for %s: %v", uuid, err)
+		}
+	}()
 
 	log.Printf("[SFTP] Connection established: User=%s, Service=%s, IP=%s", username, uuid, netConn.RemoteAddr().String())
 
@@ -182,12 +199,17 @@ func (s *SFTPServer) handleConnection(netConn net.Conn, config *ssh.ServerConfig
 			continue
 		}
 
-		// Serve SFTP
-		if err := server.Serve(); err == io.EOF {
-			server.Close()
+		// Serve SFTP. The final tree repair catches ownership and chmod changes
+		// made by clients using the package's root-owned filesystem backend.
+		serveErr := server.Serve()
+		_ = server.Close()
+		if err := serverfs.NormalizeTree(serviceRoot); err != nil {
+			log.Printf("[SFTP] Failed to normalize uploaded files for %s: %v", uuid, err)
+		}
+		if serveErr == io.EOF {
 			log.Printf("[SFTP] Connection closed: User=%s, Service=%s", username, uuid)
-		} else if err != nil {
-			log.Printf("[SFTP] Server error: %v", err)
+		} else if serveErr != nil {
+			log.Printf("[SFTP] Server error: %v", serveErr)
 		}
 	}
 }

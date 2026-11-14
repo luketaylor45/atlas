@@ -1,14 +1,16 @@
 import { useState } from 'react';
+import { isAxiosError } from 'axios';
 import { useNavigate, Link } from 'react-router-dom';
 import Logo from '../../components/Logo';
 import api from '../../lib/api';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 
 export default function LoginPage() {
     const navigate = useNavigate();
     const { login } = useAuth();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [rememberMe, setRememberMe] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -19,10 +21,13 @@ export default function LoginPage() {
 
         try {
             const res = await api.post('/auth/login', { username, password });
-            login(res.data.token, res.data.user);
+            login(res.data.token, res.data.user, rememberMe);
             navigate('/');
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to login');
+        } catch (err: unknown) {
+            const message = isAxiosError<{ error?: string }>(err)
+                ? err.response?.data?.error
+                : undefined;
+            setError(message || 'Failed to login');
         } finally {
             setLoading(false);
         }
@@ -40,16 +45,20 @@ export default function LoginPage() {
                 </div>
 
                 {error && (
-                    <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-lg text-sm text-center mb-4">
+                    <div role="alert" className="bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-lg text-sm text-center mb-4">
                         {error}
                     </div>
                 )}
 
                 <form onSubmit={handleLogin} className="flex flex-col gap-5">
                     <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Username</label>
+                        <label htmlFor="username" className="text-xs font-medium uppercase tracking-wide text-muted">Username</label>
                         <input
+                            id="username"
+                            name="username"
                             type="text"
+                            autoComplete="username"
+                            required
                             className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
                             placeholder="e.g. admin"
                             value={username}
@@ -59,11 +68,15 @@ export default function LoginPage() {
 
                     <div className="space-y-2">
                         <div className="flex items-center justify-between">
-                            <label className="text-xs font-medium uppercase tracking-wide text-muted">Password</label>
+                            <label htmlFor="password" className="text-xs font-medium uppercase tracking-wide text-muted">Password</label>
                             <a href="#" className="text-xs text-primary hover:text-primary/80">Forgot?</a>
                         </div>
                         <input
+                            id="password"
+                            name="password"
                             type="password"
+                            autoComplete="current-password"
+                            required
                             className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
                             placeholder="••••••••"
                             value={password}
@@ -71,10 +84,24 @@ export default function LoginPage() {
                         />
                     </div>
 
+                    <label htmlFor="remember-me" className="flex w-fit cursor-pointer select-none items-center gap-2.5 text-xs font-medium text-muted">
+                        <input
+                            id="remember-me"
+                            name="remember-me"
+                            type="checkbox"
+                            checked={rememberMe}
+                            disabled={loading}
+                            onChange={(e) => setRememberMe(e.target.checked)}
+                            className="h-4 w-4 rounded border-border bg-secondary accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+                        />
+                        <span>Remember me on this device</span>
+                    </label>
+
                     <button
                         type="submit"
                         disabled={loading}
                         className="w-full bg-white text-black font-semibold py-3 rounded-lg hover:bg-gray-200 transition-colors mt-2 disabled:opacity-50"
+                        aria-busy={loading}
                     >
                         {loading ? 'Signing in...' : 'Sign In'}
                     </button>

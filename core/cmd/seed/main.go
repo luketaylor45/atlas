@@ -90,6 +90,7 @@ func scanEggsDirectory() {
 		}
 
 		rootNest := ensureNest(catName, top.Name(), catDesc, nil)
+		markCatalogUnavailable(rootNest.ID)
 
 		subPath := filepath.Join(root, top.Name())
 		subLevels, _ := ioutil.ReadDir(subPath)
@@ -127,6 +128,23 @@ func scanEggsDirectory() {
 		}
 	}
 	log.Printf("[Seed] Seeding complete. Processed %d eggs.", foundCount)
+}
+
+// markCatalogUnavailable lets the files on disk define the current catalog
+// without deleting eggs that may still be referenced by existing services.
+func markCatalogUnavailable(rootNestID uint) {
+	var nestIDs []uint
+	database.DB.Model(&models.Nest{}).
+		Where("id = ? OR parent_id = ?", rootNestID, rootNestID).
+		Pluck("id", &nestIDs)
+
+	if len(nestIDs) == 0 {
+		return
+	}
+
+	database.DB.Model(&models.Egg{}).
+		Where("nest_id IN ?", nestIDs).
+		Update("available", false)
 }
 
 func ensureNest(prettyName, dirName, description string, parentID *uint) models.Nest {
@@ -187,6 +205,7 @@ func importEgg(path string, nest models.Nest) {
 	egg := models.Egg{
 		UUID:            jsonEgg.UUID,
 		NestID:          nest.ID,
+		Available:       true,
 		Name:            jsonEgg.Name,
 		Description:     jsonEgg.Description,
 		DockerImages:    string(dockerImagesJSON),

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { expireAuthSession, getStoredToken } from './authSession';
 
 const isProd = import.meta.env.PROD;
 
@@ -24,7 +25,7 @@ const api = axios.create({
 
 // Request interceptor to add token
 api.interceptors.request.use((config) => {
-    const token = localStorage.getItem('token');
+    const token = getStoredToken();
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
@@ -36,8 +37,16 @@ api.interceptors.response.use(
     (response) => response,
     (error) => {
         if (error.response?.status === 401) {
-            localStorage.removeItem('token');
-            // Optional: Redirect to login or window.location.href = '/login';
+            const activeToken = getStoredToken();
+            const authorization = error.config?.headers?.Authorization;
+            const requestToken = typeof authorization === 'string'
+                ? authorization.replace(/^Bearer\s+/i, '')
+                : null;
+
+            // A late response from an older token must not log out a newer session.
+            if (!activeToken || !requestToken || requestToken === activeToken) {
+                expireAuthSession();
+            }
         }
         return Promise.reject(error);
     }
