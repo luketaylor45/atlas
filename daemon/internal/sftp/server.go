@@ -120,6 +120,12 @@ func (s *SFTPServer) Start() error {
 				continue
 			}
 
+			// Blocked addresses are dropped before the SSH handshake.
+			if s.limiter.blocked(hostOf(conn.RemoteAddr())) {
+				conn.Close()
+				continue
+			}
+
 			go s.handleConnection(conn, sshConfig)
 		}
 	}()
