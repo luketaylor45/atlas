@@ -1,0 +1,53 @@
+{
+    "uuid": "atlas-mc-bedrock",
+    "name": "Bedrock",
+    "description": "Official Bedrock Dedicated Server for phones, consoles and Windows. Players connect over UDP, usually on port 19132. Runs on x86-64 hosts only.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:debian"
+    ],
+    "startup_command": "./bedrock_server",
+    "stop_command": "stop",
+    "startup_done": [
+        "Server started."
+    ],
+    "config_files": {
+        "server.properties": {
+            "parser": "properties",
+            "find": {
+                "server-port": "{{server.build.default.port}}",
+                "server-portv6": "{{server.build.env.SERVER_PORT_V6}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/minecraft-bedrock.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:alpine",
+    "script_entry": "ash",
+    "ports": [
+        {
+            "name": "IPv6",
+            "env": "SERVER_PORT_V6",
+            "default": 19133,
+            "protocol": "udp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Bedrock Version",
+            "env_variable": "BEDROCK_VERSION",
+            "default_value": "latest",
+            "description": "Server version to install (for example 1.26.63.1), 'latest' for the newest release or 'preview' for the newest preview build.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Library Path",
+            "env_variable": "LD_LIBRARY_PATH",
+            "default_value": ".",
+            "description": "Where the server looks for the libraries it ships with. Leave as it is.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|max:20"
+        }
+    ]
+}

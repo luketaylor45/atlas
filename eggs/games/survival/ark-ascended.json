@@ -1,0 +1,124 @@
+{
+    "uuid": "atlas-ark-ascended",
+    "name": "ARK: Survival Ascended",
+    "description": "ARK: Survival Ascended dedicated server. The game only has a Windows server, so it runs under Proton; the first start sets Proton up and takes a few minutes longer. The game port is UDP and is 7777 by convention. The console is an RCON session and becomes available once the map has loaded. Stopping saves the world first.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:proton"
+    ],
+    "startup_command": "ARK_ADMIN_PASSWORD=\"${ARK_ADMIN_PASSWORD:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \\n')}\"; arkrcon() { rcon -t rcon -a \"127.0.0.1:{{RCON_PORT}}\" -p \"${ARK_ADMIN_PASSWORD}\" \"$@\"; }; stop_ark() { echo \"[Atlas] Saving the world and stopping ARK...\"; arkrcon SaveWorld && arkrcon DoExit || kill \"${ARK_PID}\" 2>/dev/null; wait \"${ARK_PID}\"; echo \"[Atlas] Server closed.\"; exit 0; }; trap stop_ark INT TERM;  proton run ./ShooterGame/Binaries/Win64/ArkAscendedServer.exe \"${SERVER_MAP}?listen?SessionName=${SESSION_NAME}?Port={{SERVER_PORT}}?RCONPort={{RCON_PORT}}?RCONEnabled=True?MaxPlayers={{MAX_PLAYERS}}?ServerPassword=${SERVER_PASSWORD}?ServerAdminPassword=${ARK_ADMIN_PASSWORD}$( [[ \"${SERVER_PVE}\" =~ ^(1|true)$ ]] && printf %s '?ServerPVE=True' )${ARGS_PARAMS}\" -WinLiveMaxPlayers={{MAX_PLAYERS}} -Port={{SERVER_PORT}} -oldconsole -servergamelog $( [ -n \"${MOD_IDS}\" ] && printf %s \"-mods=${MOD_IDS}\" ) $( [[ \"${BATTLE_EYE}\" =~ ^(1|true)$ ]] || printf %s -NoBattlEye ) ${ARGS_FLAGS} & ARK_PID=$!; tail -c0 -F ./ShooterGame/Saved/Logs/ShooterGame.log --pid=\"${ARK_PID}\" 2>/dev/null &  until echo \"[Atlas] Waiting for the RCON connection...\"; ( arkrcon ) <&0 & wait $!; do kill -0 \"${ARK_PID}\" 2>/dev/null || break; sleep 5; done; wait \"${ARK_PID}\"",
+    "stop_command": "^C",
+    "startup_done": [
+        "Waiting commands for 127.0.0.1:"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh",
+        "_scripts/ark-ascended.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "RCON",
+            "env": "RCON_PORT",
+            "default": 27020,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SESSION_NAME",
+            "default_value": "Atlas ARK Ascended Server",
+            "description": "Name shown in the server list. It cannot contain a question mark.",
+            "rules": "required|string|max:128"
+        },
+        {
+            "name": "Map",
+            "env_variable": "SERVER_MAP",
+            "default_value": "TheIsland_WP",
+            "description": "Map to load, for example TheIsland_WP, ScorchedEarth_WP, TheCenter_WP, Aberration_WP, Extinction_WP, Astraeos_WP or Ragnarok_WP.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|alpha_dash|max:128"
+        },
+        {
+            "name": "Admin Password",
+            "env_variable": "ARK_ADMIN_PASSWORD",
+            "default_value": "",
+            "description": "Password for in-game admin commands (enablecheats) and for RCON. When empty, a random one is used for each run, so the console and a clean stop still work but nobody can log in as an admin.",
+            "rules": "nullable|alpha_dash|max:128"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "20",
+            "description": "Most players that can be connected at once.",
+            "rules": "required|integer|between:1,200"
+        },
+        {
+            "name": "PvE",
+            "env_variable": "SERVER_PVE",
+            "default_value": "1",
+            "description": "On for player-versus-environment, off for player-versus-player.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Mods",
+            "env_variable": "MOD_IDS",
+            "default_value": "",
+            "description": "CurseForge project ids of the mods to load, separated by commas.",
+            "rules": "nullable|regex:/^[0-9,]+$/|max:500"
+        },
+        {
+            "name": "BattlEye",
+            "env_variable": "BATTLE_EYE",
+            "default_value": "1",
+            "description": "Run the BattlEye anti-cheat.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Additional Options",
+            "env_variable": "ARGS_PARAMS",
+            "default_value": "",
+            "description": "Extra '?Option=Value' settings appended to the map line, written without spaces, for example '?AllowFlyerCarryPvE=True'.",
+            "rules": "nullable|regex:/^(\\?[^\\s?\"]+)*$/|max:1000"
+        },
+        {
+            "name": "Additional Flags",
+            "env_variable": "ARGS_FLAGS",
+            "default_value": "",
+            "description": "Extra launch flags, for example '-crossplay -NoTransferFromFiltering'.",
+            "rules": "nullable|string|max:1000"
+        },
+        {
+            "name": "Windows Build",
+            "env_variable": "WINDOWS_INSTALL",
+            "default_value": "1",
+            "description": "Makes SteamCMD download the Windows build, which is the only one this game has.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|in:1"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "2430930",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

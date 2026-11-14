@@ -1,0 +1,95 @@
+{
+    "uuid": "atlas-tmodloader",
+    "name": "tModLoader",
+    "description": "Modded Terraria server (tModLoader 1.4) from the project's GitHub releases. Put .tmod files in mods/ and list the enabled ones in mods/enabled.json. Allow 2 GB of disk and at least 2 GB of memory, more for large mod packs.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:dotnet_8",
+        "ghcr.io/ptero-eggs/yolks:dotnet_6"
+    ],
+    "startup_command": "dotnet tModLoader.dll -server -ip 0.0.0.0 -port {{SERVER_PORT}} -maxplayers {{MAX_PLAYERS}} -password \"${SERVER_PASSWORD}\" -motd \"${MOTD}\" -world /home/container/saves/Worlds/{{WORLD_NAME}}.wld -worldname {{WORLD_NAME}} -autocreate {{WORLD_SIZE}} -config serverconfig.txt -savedirectory /home/container -tmlsavedirectory /home/container/saves -modpath /home/container/mods",
+    "stop_command": "exit",
+    "startup_done": [
+        "Type 'help' for a list of commands",
+        "Server started"
+    ],
+    "config_files": {
+        "serverconfig.txt": {
+            "parser": "properties",
+            "find": {
+                "difficulty": "{{server.build.env.DIFFICULTY}}",
+                "seed": "{{server.build.env.WORLD_SEED}}",
+                "language": "{{server.build.env.LANGUAGE}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/tmodloader.sh"
+    ],
+    "script_container": "ghcr.io/ptero-eggs/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "tModLoader Version",
+            "env_variable": "TMODLOADER_VERSION",
+            "default_value": "latest",
+            "description": "Release to install: 'latest' for the newest stable release or a tag such as v2025.08.3.1. Current releases run on the .NET 8 image, older 1.4 releases on .NET 6; the install log says which runtime a release needs. Reinstall the server to change it.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "World Name",
+            "env_variable": "WORLD_NAME",
+            "default_value": "world",
+            "description": "Name of the world and of its file in saves/Worlds. A world with this name is created if it does not exist yet.",
+            "rules": "required|alpha_dash|max:32"
+        },
+        {
+            "name": "World Size",
+            "env_variable": "WORLD_SIZE",
+            "default_value": "1",
+            "description": "Size of a newly created world: 1 small, 2 medium, 3 large.",
+            "rules": "required|string|in:1,2,3"
+        },
+        {
+            "name": "World Difficulty",
+            "env_variable": "DIFFICULTY",
+            "default_value": "0",
+            "description": "Difficulty of a newly created world: 0 classic, 1 expert, 2 master, 3 journey.",
+            "rules": "required|string|in:0,1,2,3"
+        },
+        {
+            "name": "World Seed",
+            "env_variable": "WORLD_SEED",
+            "default_value": "",
+            "description": "Seed for a newly created world. Leave empty for a random one.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "8",
+            "description": "Highest number of players that can be connected at once.",
+            "rules": "required|integer|between:1,255"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Message Of The Day",
+            "env_variable": "MOTD",
+            "default_value": "Welcome to the server",
+            "description": "Message shown to players when they join.",
+            "rules": "required|string|max:128"
+        },
+        {
+            "name": "Language",
+            "env_variable": "LANGUAGE",
+            "default_value": "en-US",
+            "description": "Language of the server's own messages.",
+            "rules": "required|string|in:en-US,de-DE,it-IT,fr-FR,es-ES,ru-RU,zh-Hans,pt-BR,pl-PL"
+        }
+    ]
+}

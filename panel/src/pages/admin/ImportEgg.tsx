@@ -8,6 +8,13 @@ import { parseJSON, type Nest } from '../../lib/types';
 import { Alert, Button, Card, CardHeader, Field, LoadingState, PageHeader, Select, Textarea, useToast } from '../../components/ui';
 import { NestFormModal } from './shared/NestFormModal';
 import { groupNests, rootNests } from './shared/NestGroups';
+import { primaryLinkClass } from './shared/ServiceForm';
+
+/** Response of POST /admin/eggs/import: the new egg, plus what the importer adapted or left out. */
+interface ImportResponse {
+    name?: string;
+    import_notes?: string[] | null;
+}
 
 interface EggPreview {
     name: string;
@@ -57,6 +64,8 @@ export default function ImportEggPage() {
     const [formError, setFormError] = useState('');
     const [creatingNest, setCreatingNest] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    // Set after an import that came with notes, which stay on screen until the admin moves on.
+    const [imported, setImported] = useState<{ name: string; notes: string[] } | null>(null);
 
     const [attempt, setAttempt] = useState(0);
 
@@ -136,9 +145,19 @@ export default function ImportEggPage() {
 
         setSubmitting(true);
         try {
-            const res = await api.post<{ name?: string }>('/admin/eggs/import', { nest_id: nest, content });
-            toast.success(`${res.data?.name || 'The egg'} was imported.`);
-            navigate('/admin/eggs');
+            const res = await api.post<ImportResponse>('/admin/eggs/import', { nest_id: nest, content });
+            const eggName = res.data?.name || 'The egg';
+            const notes = Array.isArray(res.data?.import_notes)
+                ? res.data.import_notes.filter((note) => typeof note === 'string' && note.trim() !== '')
+                : [];
+            toast.success(`${eggName} was imported.`);
+            if (notes.length === 0) {
+                navigate('/admin/eggs');
+                return;
+            }
+            // The notes say what was changed to make the egg fit, and are not stored anywhere.
+            setImported({ name: eggName, notes });
+            setSubmitting(false);
         } catch (err) {
             const status = errorStatus(err);
             const message = errorMessage(err, 'Could not import the egg.');
@@ -152,6 +171,14 @@ export default function ImportEggPage() {
             }
             setSubmitting(false);
         }
+    };
+
+    const importAnother = () => {
+        setImported(null);
+        setContent('');
+        setFileName('');
+        setTouched(false);
+        setContentError('');
     };
 
     const header = (
@@ -186,6 +213,30 @@ export default function ImportEggPage() {
                 ) : (
                     <LoadingState label="Loading nests…" />
                 )}
+            </>
+        );
+    }
+
+    if (imported) {
+        return (
+            <>
+                {header}
+                <Alert tone="info" title={`${imported.name} was imported`}>
+                    <p>A few things were adapted or left out to make it fit:</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                        {imported.notes.map((note) => (
+                            <li key={note}>{note}</li>
+                        ))}
+                    </ul>
+                </Alert>
+                <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+                    <Button variant="ghost" onClick={importAnother}>
+                        Import another egg
+                    </Button>
+                    <Link to="/admin/eggs" className={primaryLinkClass}>
+                        Go to eggs
+                    </Link>
+                </div>
             </>
         );
     }

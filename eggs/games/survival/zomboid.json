@@ -1,0 +1,106 @@
+{
+    "uuid": "atlas-zomboid",
+    "name": "Project Zomboid",
+    "description": "Project Zomboid dedicated server. The game port is UDP and is 16261 by convention; the Direct Connection port is UDP and is 16262 by convention. Settings and saves are kept in .cache, under the internal server name 'servertest'. The public name, password, player limit and ports below are written to .cache/Server/servertest.ini before every start. The server will not start until an admin password is set.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:debian"
+    ],
+    "startup_command": "if [ -z \"${ADMIN_PASSWORD}\" ]; then echo \"[Atlas] Set the Admin Password variable, then start the server again.\"; exit 1; fi; if [ \"{{SERVER_MEMORY}}\" -gt 0 ] 2>/dev/null; then sed -i -E \"s/-Xmx[0-9]+[kKmMgG]?/-Xmx$(( {{SERVER_MEMORY}} * 80 / 100 ))m/\" ProjectZomboid64.json; fi; export PATH=\"./jre64/bin:${PATH}\" LD_LIBRARY_PATH=\"./linux64:./natives:.:./jre64/lib/amd64:${LD_LIBRARY_PATH}\"; LD_PRELOAD=\"${LD_PRELOAD}:libjsig.so\" ./ProjectZomboid64 -port {{SERVER_PORT}} -udpport {{UDP_PORT}} -cachedir=/home/container/.cache -servername servertest -adminusername \"${ADMIN_USER}\" -adminpassword \"${ADMIN_PASSWORD}\"",
+    "stop_command": "quit",
+    "startup_done": [
+        "SERVER STARTED"
+    ],
+    "config_files": {
+        ".cache/Server/servertest.ini": {
+            "parser": "properties",
+            "find": {
+                "DefaultPort": "{{server.build.default.port}}",
+                "UDPPort": "{{server.build.env.UDP_PORT}}",
+                "PublicName": "{{server.build.env.SERVER_PUBLIC_NAME}}",
+                "Password": "{{server.build.env.SERVER_PASSWORD}}",
+                "MaxPlayers": "{{server.build.env.MAX_PLAYERS}}",
+                "Public": "{{server.build.env.PUBLIC_SERVER}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/steamcmd.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Direct Connection",
+            "env": "UDP_PORT",
+            "default": 16262,
+            "protocol": "udp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Public Name",
+            "env_variable": "SERVER_PUBLIC_NAME",
+            "default_value": "Atlas Project Zomboid Server",
+            "description": "Name shown in the server browser.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "16",
+            "description": "Most players that can be connected at once. Allow roughly 500 MB of memory per player on top of 2 GB.",
+            "rules": "required|integer|between:1,100"
+        },
+        {
+            "name": "Public Server",
+            "env_variable": "PUBLIC_SERVER",
+            "default_value": "false",
+            "description": "List the server in the in-game public server browser.",
+            "rules": "required|in:false,true"
+        },
+        {
+            "name": "Admin Username",
+            "env_variable": "ADMIN_USER",
+            "default_value": "admin",
+            "description": "Name of the admin account created on the first start.",
+            "rules": "required|alpha_dash|max:20"
+        },
+        {
+            "name": "Admin Password",
+            "env_variable": "ADMIN_PASSWORD",
+            "default_value": "",
+            "description": "Password of the admin account. Required: the server will not start without one. It is applied when the account is first created; change it afterwards from the console.",
+            "rules": "required|string|max:32"
+        },
+        {
+            "name": "Beta Branch",
+            "env_variable": "SRCDS_BETAID",
+            "default_value": "",
+            "description": "Steam branch to install instead of the public one, for example 'unstable'. Leave empty for the public branch. Reinstall the server after changing it.",
+            "rules": "nullable|string|max:40"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "380870",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

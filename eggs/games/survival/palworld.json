@@ -1,0 +1,110 @@
+{
+    "uuid": "atlas-palworld",
+    "name": "Palworld",
+    "description": "Palworld dedicated server. The game port is UDP and is 8211 by convention. The server name, passwords and player limit below are written to Pal/Saved/Config/LinuxServer/PalWorldSettings.ini before every start; every other setting in that file is yours to edit. Palworld has no console of its own, so console input is sent over RCON and 'stop' saves the world first.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:debian"
+    ],
+    "startup_command": "export ADMIN_PASSWORD=\"${ADMIN_PASSWORD:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \\n')}\"; bash .atlas/palworld.sh config; bash .atlas/palworld.sh console <&0 & ./Pal/Binaries/Linux/PalServer-Linux-Shipping Pal -port={{SERVER_PORT}} -queryport={{QUERY_PORT}} -players={{MAX_PLAYERS}} -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS $( [[ \"${PUBLIC_LOBBY}\" =~ ^(1|true)$ ]] && printf %s \"-publiclobby -publicport={{SERVER_PORT}}\" ) $( [ -n \"${PUBLIC_IP}\" ] && printf %s \"-publicip=${PUBLIC_IP}\" )",
+    "stop_command": "stop",
+    "startup_done": [
+        "Running Palworld dedicated server on",
+        "Setting breakpad minidump AppID = 2394010"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh",
+        "_scripts/palworld.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Query",
+            "env": "QUERY_PORT",
+            "default": 27015,
+            "protocol": "udp"
+        },
+        {
+            "name": "RCON",
+            "env": "RCON_PORT",
+            "default": 25575,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Atlas Palworld Server",
+            "description": "Name shown in the server list.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Server Description",
+            "env_variable": "SERVER_DESCRIPTION",
+            "default_value": "",
+            "description": "Short description shown in the server list.",
+            "rules": "nullable|string|max:128"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|alpha_dash|max:30"
+        },
+        {
+            "name": "Admin Password",
+            "env_variable": "ADMIN_PASSWORD",
+            "default_value": "",
+            "description": "Password for in-game admin commands (/AdminPassword) and for RCON. When empty, a random one is used for each run, so the console and a clean stop still work but nobody can log in as an admin.",
+            "rules": "nullable|alpha_dash|max:30"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "32",
+            "description": "Most players that can be connected at once (1-32).",
+            "rules": "required|integer|between:1,32"
+        },
+        {
+            "name": "Community Server",
+            "env_variable": "PUBLIC_LOBBY",
+            "default_value": "0",
+            "description": "List the server in the in-game community server browser.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Public IP",
+            "env_variable": "PUBLIC_IP",
+            "default_value": "",
+            "description": "Address announced to the community server browser. Leave empty to let the server detect it.",
+            "rules": "nullable|ip"
+        },
+        {
+            "name": "REST API Port",
+            "env_variable": "RESTAPI_PORT",
+            "default_value": "8212",
+            "description": "Port of the server's REST API. It is only used inside the container, to save and shut down cleanly, and is not published.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|integer|between:1024,65535"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "2394010",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

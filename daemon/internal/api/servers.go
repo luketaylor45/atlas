@@ -40,6 +40,10 @@ type UpdateServerRequest struct {
 	DockerImage    string `json:"docker_image"`
 	StartupCommand string `json:"startup_command"`
 	Environment    string `json:"environment"`
+
+	ConfigFiles string   `json:"config_files"`
+	StartupDone []string `json:"startup_done"`
+	StopCommand string   `json:"stop_command"`
 }
 
 func UpdateServer(c *gin.Context) {
@@ -70,6 +74,15 @@ func UpdateServer(c *gin.Context) {
 		return
 	}
 
+	saveRuntime(uuid, serverRuntime{
+		ConfigFiles: req.ConfigFiles,
+		StartupDone: req.StartupDone,
+		StopCommand: req.StopCommand,
+		Port:        req.Port,
+		Memory:      int64(req.Memory),
+		Environment: req.Environment,
+	})
+
 	// 3. We can't change the Image of a running container without recreating it.
 	// But we can update the record. Recreations should happen on Reinstall or manual rebuild.
 	// For now, we update scripts and resources.
@@ -83,13 +96,8 @@ func writeStartScript(uuid string, startupCmd string, port int, memory int64, en
 		return fmt.Errorf("prepare startup script directory: %w", err)
 	}
 
-	// Create a map for all available replacements
-	replacements := map[string]string{
-		"SERVER_PORT":   fmt.Sprintf("%d", port),
-		"SERVER_MEMORY": fmt.Sprintf("%d", memory),
-	}
-
-	// Add environment variables to the map
+	// Everything a {{NAME}} in the startup command can stand for.
+	replacements := map[string]string{}
 	if environment != "" {
 		var envVars map[string]string
 		if err := json.Unmarshal([]byte(environment), &envVars); err == nil {
@@ -98,6 +106,11 @@ func writeStartScript(uuid string, startupCmd string, port int, memory int64, en
 			}
 		}
 	}
+	// Atlas's own values come last so an egg variable can never shadow them.
+	replacements["SERVER_PORT"] = fmt.Sprintf("%d", port)
+	replacements["SERVER_MEMORY"] = fmt.Sprintf("%d", memory)
+	replacements["SERVER_IP"] = serverBindAddress
+	replacements["SERVER_UUID"] = uuid
 
 	// Use regex to find all {{VARIABLE}} and replace them
 	re := regexp.MustCompile(`{{([A-Za-z0-9_.]+)}}`)
@@ -152,6 +165,9 @@ type PowerActionRequest struct {
 	Environment    string `json:"environment"`
 	Port           int    `json:"port"`
 	Memory         int64  `json:"memory"`
+
+	ConfigFiles string   `json:"config_files"`
+	StartupDone []string `json:"startup_done"`
 }
 
 func powerActionErrorMessage(action string, port int, err error) string {
@@ -246,12 +262,23 @@ func HandlePowerAction(c *gin.Context) {
 
 	log.Printf("[Daemon] Power action %s for %s", req.Action, uuid)
 
-	// Re-write the start script so the latest startup settings apply.
+	// Re-write the start script and remember the start settings so the
+	// latest configuration applies.
+	runtime, _ := loadRuntime(uuid)
 	if req.StartupCommand != "" && req.Action != "stop" && req.Action != "kill" {
 		if err := writeStartScript(uuid, req.StartupCommand, req.Port, req.Memory, req.Environment); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		runtime = serverRuntime{
+			ConfigFiles: req.ConfigFiles,
+			StartupDone: req.StartupDone,
+			StopCommand: req.StopCommand,
+			Port:        req.Port,
+			Memory:      req.Memory,
+			Environment: req.Environment,
+		}
+		saveRuntime(uuid, runtime)
 	}
 
 	ctx := context.Background()
@@ -261,6 +288,7 @@ func HandlePowerAction(c *gin.Context) {
 		_, err = ensureContainerNetwork(ctx, uuid)
 		if err == nil {
 			NotifyStatus(uuid, "starting")
+			applyConfigFiles(ctx, uuid, runtime)
 			err = docker.Client.ContainerStart(ctx, uuid, container.StartOptions{})
 		}
 	case "stop":
@@ -274,6 +302,7 @@ func HandlePowerAction(c *gin.Context) {
 		}
 		if err == nil {
 			NotifyStatus(uuid, "starting")
+			applyConfigFiles(ctx, uuid, runtime)
 			err = docker.Client.ContainerStart(ctx, uuid, container.StartOptions{})
 		}
 	case "kill":
@@ -545,6 +574,7 @@ func DeleteServer(c *gin.Context) {
 		return
 	}
 	_ = os.Remove(installLogPath(uuid))
+	removeRuntime(uuid)
 
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }

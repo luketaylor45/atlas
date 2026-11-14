@@ -936,3 +936,186 @@ func TestOwnerAddsSubUserByUsernameWithExactlyTheChosenPermissions(t *testing.T)
 		t.Fatalf("permissions after update: %+v", grant)
 	}
 }
+
+// ---------------------------------------------------------------- egg runtime
+
+func TestEggRuntimeSettingsReachTheNodeOnCreateAndOnEveryStart(t *testing.T) {
+	e := newEnv(t)
+	configFiles := `{"server.properties":{"parser":"properties","find":{"server-port":"{{server.build.default.port}}"}}}`
+	must(t, database.DB.Model(&models.Egg{}).Where("id = ?", e.egg.ID).Updates(map[string]interface{}{
+		"config":       configFiles,
+		"startup_done": `["Done (","regex:^Ready"]`,
+	}).Error)
+
+	service := e.createService(8211)
+	created := e.node.calls(http.MethodPost, "/api/servers")
+	if len(created) != 1 || created[0].Body["config_files"] != configFiles || created[0].Body["stop_command"] != "stop" {
+		t.Fatalf("create spec = %+v", created)
+	}
+	if done, _ := created[0].Body["startup_done"].([]interface{}); len(done) != 2 || done[0] != "Done (" {
+		t.Fatalf("create spec startup_done = %v", created[0].Body["startup_done"])
+	}
+
+	// Editing the egg takes effect on the next start, with no rebuild.
+	e.markInstalled(&service)
+	e.expect(e.do(&e.admin, http.MethodPut, fmt.Sprintf("/admin/eggs/%d", e.egg.ID), map[string]interface{}{"startup_done": `["Server started"]`}), http.StatusOK)
+	e.expect(e.do(&e.owner, http.MethodPost, "/services/"+service.UUID+"/power", map[string]string{"action": "start"}), http.StatusOK)
+	calls := e.node.calls(http.MethodPost, "/power")
+	if len(calls) != 1 || calls[0].Body["config_files"] != configFiles {
+		t.Fatalf("power calls = %+v", calls)
+	}
+	if done, _ := calls[0].Body["startup_done"].([]interface{}); len(done) != 1 || done[0] != "Server started" {
+		t.Fatalf("power startup_done = %v", calls[0].Body["startup_done"])
+	}
+
+	// An egg without done-strings sends an empty list, never null.
+	e.expect(e.do(&e.admin, http.MethodPut, fmt.Sprintf("/admin/eggs/%d", e.egg.ID), map[string]interface{}{"startup_done": ""}), http.StatusOK)
+	e.expect(e.do(&e.owner, http.MethodPost, "/services/"+service.UUID+"/power", map[string]string{"action": "restart"}), http.StatusOK)
+	calls = e.node.calls(http.MethodPost, "/power")
+	if done, ok := calls[len(calls)-1].Body["startup_done"].([]interface{}); !ok || len(done) != 0 {
+		t.Fatalf("cleared startup_done = %#v", calls[len(calls)-1].Body["startup_done"])
+	}
+}
+
+func TestEggEditorRejectsBrokenRuntimeSettings(t *testing.T) {
+	e := newEnv(t)
+	path := fmt.Sprintf("/admin/eggs/%d", e.egg.ID)
+
+	e.expect(e.do(&e.admin, http.MethodPut, path, map[string]interface{}{"config_files": `{"a.toml":{"parser":"toml","find":{}}}`}), http.StatusBadRequest)
+	e.expect(e.do(&e.admin, http.MethodPut, path, map[string]interface{}{"config_files": `{not json`}), http.StatusBadRequest)
+	e.expect(e.do(&e.admin, http.MethodPut, path, map[string]interface{}{"startup_done": `{"done":"x"}`}), http.StatusBadRequest)
+	e.expect(e.do(&e.admin, http.MethodPut, path, map[string]interface{}{"name": " "}), http.StatusBadRequest)
+
+	res := e.expect(e.do(&e.admin, http.MethodPut, path, map[string]interface{}{
+		"config_files": "{\n  \"config.yml\": {\"parser\": \"yaml\", \"find\": {\"port\": \"{{server.build.default.port}}\"}}\n}",
+		"startup_done": `"Done"`,
+	}), http.StatusOK)
+	var egg models.Egg
+	must(t, json.Unmarshal([]byte(res.Raw), &egg))
+	if egg.ConfigFiles != `{"config.yml":{"parser":"yaml","find":{"port":"{{server.build.default.port}}"}}}` || egg.StartupDone != `["Done"]` {
+		t.Fatalf("stored config = %s done = %s", egg.ConfigFiles, egg.StartupDone)
+	}
+}
+
+func TestVariableRulesAreEnforcedOnChangedValuesOnly(t *testing.T) {
+	e := newEnv(t)
+	must(t, database.DB.Model(&models.EggVariable{}).Where("egg_id = ? AND environment_variable = ?", e.egg.ID, "SERVER_NAME").
+		Update("rules", "required|string|max:10").Error)
+	must(t, database.DB.Create(&models.EggVariable{EggID: e.egg.ID, Name: "Difficulty", EnvironmentVariable: "DIFFICULTY", DefaultValue: "legacy", Rules: "required|in:easy,hard"}).Error)
+
+	// The stored default breaks its own rule; a server can still be created
+	// and saved as long as that value is not the one being changed.
+	service := e.createService(8211)
+	e.markInstalled(&service)
+	path := "/services/" + service.UUID + "/environment"
+
+	e.expect(e.do(&e.owner, http.MethodPost, path, map[string]string{"environment": `{"SERVER_NAME":"Short"}`}), http.StatusOK)
+	res := e.expect(e.do(&e.owner, http.MethodPost, path, map[string]string{"environment": `{"SERVER_NAME":"Much too long a name"}`}), http.StatusBadRequest)
+	if !strings.Contains(res.Raw, "Server Name must be at most 10 characters") {
+		t.Fatalf("error = %s", res.Raw)
+	}
+	e.expect(e.do(&e.owner, http.MethodPost, path, map[string]string{"environment": `{"SERVER_NAME":""}`}), http.StatusBadRequest)
+	e.expect(e.do(&e.owner, http.MethodPost, path, map[string]string{"environment": `{"DIFFICULTY":"impossible"}`}), http.StatusBadRequest)
+	e.expect(e.do(&e.owner, http.MethodPost, path, map[string]string{"environment": `{"DIFFICULTY":"hard"}`}), http.StatusOK)
+	// Admins are held to the rules as well.
+	e.expect(e.do(&e.admin, http.MethodPost, path, map[string]string{"environment": `{"DIFFICULTY":"impossible"}`}), http.StatusBadRequest)
+}
+
+func TestImportedPterodactylEggKeepsItsRuntimeSettings(t *testing.T) {
+	e := newEnv(t)
+	file := `{
+  "meta": {"version": "PTDL_v2"},
+  "name": "Imported",
+  "docker_images": {"Java 21": "yolks:java_21"},
+  "startup": "java -jar server.jar",
+  "config": {
+    "files": "{\"server.properties\": {\"parser\": \"properties\", \"find\": {\"server-port\": \"{{server.build.default.port}}\"}}}",
+    "startup": "{\"done\": \")! For help, type \"}",
+    "stop": "stop"
+  },
+  "scripts": {"installation": {"script": "echo hi", "container": "installer", "entrypoint": "ash"}},
+  "variables": [
+    {"name": "Query Port", "env_variable": "QUERY_PORT", "default_value": "25566", "rules": "required|integer"},
+    {"name": "Mode", "env_variable": "MODE", "default_value": "survival", "rules": "required|in:survival,creative"}
+  ]
+}`
+	res := e.expect(e.do(&e.admin, http.MethodPost, "/admin/eggs/import", map[string]interface{}{"nest_id": e.egg.NestID, "content": file}), http.StatusCreated)
+	var imported struct {
+		models.Egg
+		Notes []string `json:"import_notes"`
+	}
+	must(t, json.Unmarshal([]byte(res.Raw), &imported))
+
+	if imported.StartupDone != `[")! For help, type "]` || !strings.Contains(imported.ConfigFiles, `"parser":"properties"`) {
+		t.Fatalf("runtime settings: done=%s config=%s", imported.StartupDone, imported.ConfigFiles)
+	}
+	if !strings.Contains(imported.Ports, `"env":"QUERY_PORT"`) || len(imported.Variables) != 1 || imported.Variables[0].EnvironmentVariable != "MODE" {
+		t.Fatalf("ports=%s variables=%+v", imported.Ports, imported.Variables)
+	}
+	if len(imported.Notes) != 1 {
+		t.Fatalf("notes = %v", imported.Notes)
+	}
+}
+
+func TestPortsTheGameDerivesMoveWithTheGamePort(t *testing.T) {
+	e := newEnv(t)
+	// The game uses its game port plus one for queries, and RCON wherever it is told.
+	must(t, database.DB.Model(&models.Egg{}).Where("id = ?", e.egg.ID).Update("ports",
+		`[{"name":"Query","env":"QUERY_PORT","default":2457,"protocol":"udp","offset":1},{"name":"RCON","env":"RCON_PORT","default":25575,"protocol":"tcp"}]`).Error)
+
+	ports := func(service models.Service) map[string]int {
+		var rows []models.ServicePort
+		must(t, database.DB.Where("service_id = ?", service.ID).Find(&rows).Error)
+		result := map[string]int{}
+		for _, row := range rows {
+			result[row.Env] = row.Port
+		}
+		return result
+	}
+
+	first := e.createService(3000)
+	if got := ports(first); got["QUERY_PORT"] != 3001 || got["RCON_PORT"] != 25575 {
+		t.Fatalf("first server ports = %v", got)
+	}
+	spec := e.node.calls(http.MethodPost, "/api/servers")[0].Body
+	if environment, _ := spec["environment"].(string); !strings.Contains(environment, `"QUERY_PORT":"3001"`) {
+		t.Fatalf("the game was not told its query port: %v", spec["environment"])
+	}
+
+	// A game port whose partner is taken is refused, with the reason.
+	res := e.expect(e.do(&e.admin, http.MethodPost, "/admin/services", map[string]interface{}{
+		"name": "Clash", "node_id": e.nodeRow.ID, "egg_id": e.egg.ID, "user_id": e.owner.ID, "memory": 1024, "disk": 1000, "cpu": 100, "port": 2999,
+	}), http.StatusConflict)
+	if !strings.Contains(res.Raw, "game port plus 1") {
+		t.Fatalf("clash error = %s", res.Raw)
+	}
+
+	second := e.createService(3010)
+	e.markInstalled(&first)
+
+	// Moving the game port by one works even though the new port is the
+	// one the server's own query port holds today.
+	e.expect(e.do(&e.admin, http.MethodPut, fmt.Sprintf("/admin/services/%d", first.ID), map[string]interface{}{"port": 3001}), http.StatusOK)
+	if got := ports(first); got[models.PrimaryPortEnv] != 3001 || got["QUERY_PORT"] != 3002 || got["RCON_PORT"] != 25575 {
+		t.Fatalf("ports after moving by one = %v", got)
+	}
+	rebuilds := e.node.calls(http.MethodPost, "/rebuild")
+	if environment, _ := rebuilds[len(rebuilds)-1].Body["environment"].(string); !strings.Contains(environment, `"QUERY_PORT":"3002"`) {
+		t.Fatalf("rebuild environment = %v", rebuilds[len(rebuilds)-1].Body["environment"])
+	}
+
+	// A move that would put the derived port on another server is refused
+	// and changes nothing.
+	res = e.expect(e.do(&e.admin, http.MethodPut, fmt.Sprintf("/admin/services/%d", first.ID), map[string]interface{}{"port": 3009}), http.StatusConflict)
+	if !strings.Contains(res.Raw, "3010") || !strings.Contains(res.Raw, "game port plus 1") {
+		t.Fatalf("refused move = %s", res.Raw)
+	}
+	if got := ports(first); got[models.PrimaryPortEnv] != 3001 || got["QUERY_PORT"] != 3002 {
+		t.Fatalf("ports after a refused move = %v", got)
+	}
+	// Nor may it land on the server's own port that is staying put.
+	e.expect(e.do(&e.admin, http.MethodPut, fmt.Sprintf("/admin/services/%d", first.ID), map[string]interface{}{"port": 25574}), http.StatusConflict)
+	if got := ports(second); got[models.PrimaryPortEnv] != 3010 || got["QUERY_PORT"] != 3011 {
+		t.Fatalf("the other server changed: %v", got)
+	}
+}

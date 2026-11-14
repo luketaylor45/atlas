@@ -24,8 +24,8 @@ const (
 
 // nodeState is what a node reports about itself.
 type nodeState struct {
-	// Servers maps a service UUID to "running" or "stopped" for every game
-	// container that exists.
+	// Servers maps a service UUID to "running", "starting" or "stopped" for
+	// every game container that exists.
 	Servers map[string]string `json:"servers"`
 	// Installing lists the services with an install job in progress.
 	Installing []string `json:"installing"`
@@ -54,8 +54,11 @@ func reconcileStatus(current string, sinceUpdate time.Duration, container string
 	}
 
 	actual := StatusOffline
-	if container == "running" {
+	switch container {
+	case "running":
 		actual = StatusRunning
+	case "starting":
+		actual = StatusStarting
 	}
 
 	switch current {

@@ -211,3 +211,53 @@ func TestEggPortsIgnoresInvalidDeclarations(t *testing.T) {
 		t.Fatalf("invalid JSON produced %+v", got)
 	}
 }
+
+func TestPlanServicePortsDerivesPortsTheGameWorksOutItself(t *testing.T) {
+	declared := []models.EggPort{
+		{Name: "Query", Env: "QUERY_PORT", Default: 2457, Protocol: "udp", Offset: 1},
+		{Name: "RCON", Env: "RCON_PORT", Default: 2458, Protocol: "tcp"},
+	}
+
+	// The derived port follows the primary one, whatever its default says.
+	plan, err := planServicePorts(map[int]bool{}, 3000, declared, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, port := range plan {
+		got[port.Env] = port.Port
+	}
+	if got["QUERY_PORT"] != 3001 || got["RCON_PORT"] != 2458 || got[models.PrimaryPortEnv] != 3000 {
+		t.Fatalf("plan = %v", got)
+	}
+
+	// An independent port steps out of the way of a derived one.
+	plan, err = planServicePorts(map[int]bool{}, 2457, declared, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, port := range plan {
+		got[port.Env] = port.Port
+	}
+	if got["QUERY_PORT"] != 2458 || got["RCON_PORT"] != 2459 {
+		t.Fatalf("plan = %v", got)
+	}
+
+	// A derived port that is taken cannot be moved: the game port has to change.
+	_, err = planServicePorts(map[int]bool{3001: true}, 3000, declared, nil)
+	var derived *derivedPortTakenError
+	if !errors.As(err, &derived) || !errors.Is(err, errPortTaken) || derived.Port != 3001 {
+		t.Fatalf("taken derived port: %v", err)
+	}
+
+	// Asking for the value it would get anyway is fine; anything else is not.
+	if _, err := planServicePorts(map[int]bool{}, 3000, declared, map[string]int{"QUERY_PORT": 3001}); err != nil {
+		t.Fatalf("matching request: %v", err)
+	}
+	if _, err := planServicePorts(map[int]bool{}, 3000, declared, map[string]int{"QUERY_PORT": 4000}); err == nil {
+		t.Fatal("a derived port was allowed to differ from the game port plus its offset")
+	}
+	if _, err := planServicePorts(map[int]bool{}, 65535, declared, nil); err == nil {
+		t.Fatal("a derived port above 65535 was accepted")
+	}
+}

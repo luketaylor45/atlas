@@ -1,0 +1,114 @@
+{
+    "uuid": "atlas-ark",
+    "name": "ARK: Survival Evolved",
+    "description": "ARK: Survival Evolved dedicated server. The game port is UDP and is 7777 by convention; ARK also opens the game port + 1, so give the Raw UDP port that number. The console is an RCON session and becomes available once the map has loaded, which takes several minutes. Stopping saves the world first.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:debian"
+    ],
+    "startup_command": "ARK_ADMIN_PASSWORD=\"${ARK_ADMIN_PASSWORD:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \\n')}\"; arkrcon() { rcon -t rcon -a \"127.0.0.1:{{RCON_PORT}}\" -p \"${ARK_ADMIN_PASSWORD}\" \"$@\"; }; stop_ark() { echo \"[Atlas] Saving the world and stopping ARK...\"; arkrcon SaveWorld && arkrcon DoExit || kill \"${ARK_PID}\" 2>/dev/null; wait \"${ARK_PID}\"; echo \"[Atlas] Server closed.\"; exit 0; }; trap stop_ark INT TERM;  ( cd ShooterGame/Binaries/Linux && exec ./ShooterGameServer \"${SERVER_MAP}?listen?SessionName=${SESSION_NAME}?ServerPassword=${ARK_PASSWORD}?ServerAdminPassword=${ARK_ADMIN_PASSWORD}?Port={{SERVER_PORT}}?QueryPort={{QUERY_PORT}}?RCONPort={{RCON_PORT}}?RCONEnabled=True?MaxPlayers={{MAX_PLAYERS}}?GameModIds=${MOD_ID}\" -server -automanagedmods -log $( [[ \"${BATTLE_EYE}\" =~ ^(1|true)$ ]] || printf %s -NoBattlEye ) ${ARGS} ) & ARK_PID=$!;  until echo \"[Atlas] Waiting for the RCON connection...\"; ( arkrcon ) <&0 & wait $!; do kill -0 \"${ARK_PID}\" 2>/dev/null || break; sleep 5; done; wait \"${ARK_PID}\"",
+    "stop_command": "^C",
+    "startup_done": [
+        "Waiting commands for 127.0.0.1:"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh",
+        "_scripts/ark.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Raw UDP (game port + 1)",
+            "env": "RAW_PORT",
+            "default": 7778,
+            "protocol": "udp",
+            "offset": 1
+        },
+        {
+            "name": "Query",
+            "env": "QUERY_PORT",
+            "default": 27015,
+            "protocol": "udp"
+        },
+        {
+            "name": "RCON",
+            "env": "RCON_PORT",
+            "default": 27020,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SESSION_NAME",
+            "default_value": "Atlas ARK Server",
+            "description": "Name shown in the server list. It cannot contain a question mark.",
+            "rules": "required|string|max:128"
+        },
+        {
+            "name": "Map",
+            "env_variable": "SERVER_MAP",
+            "default_value": "TheIsland",
+            "description": "Map to load: TheIsland, TheCenter, ScorchedEarth_P, Ragnarok, Aberration_P, Extinction, Valguero_P, Genesis, CrystalIsles, Gen2, LostIsland or Fjordur.",
+            "rules": "required|string|max:40"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "ARK_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|alpha_dash|max:100"
+        },
+        {
+            "name": "Admin Password",
+            "env_variable": "ARK_ADMIN_PASSWORD",
+            "default_value": "",
+            "description": "Password for in-game admin commands (enablecheats) and for RCON. When empty, a random one is used for each run, so the console and a clean stop still work but nobody can log in as an admin.",
+            "rules": "nullable|alpha_dash|max:100"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "20",
+            "description": "Most players that can be connected at once.",
+            "rules": "required|integer|between:1,200"
+        },
+        {
+            "name": "Mods",
+            "env_variable": "MOD_ID",
+            "default_value": "",
+            "description": "Steam Workshop mod ids, separated by commas. The server downloads and updates them on start.",
+            "rules": "nullable|regex:/^[0-9,]+$/|max:500"
+        },
+        {
+            "name": "BattlEye",
+            "env_variable": "BATTLE_EYE",
+            "default_value": "1",
+            "description": "Run the BattlEye anti-cheat.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Additional Arguments",
+            "env_variable": "ARGS",
+            "default_value": "",
+            "description": "Extra launch flags, for example '-crossplay -ForceAllowCaveFlyers'.",
+            "rules": "nullable|string|max:500"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "376030",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "0",
+            "description": "Check Steam for a game update every time the server starts. ARK is large, so the check adds a minute or more to every start.",
+            "rules": "boolean"
+        }
+    ]
+}

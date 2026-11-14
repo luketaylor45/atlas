@@ -1,0 +1,92 @@
+{
+    "uuid": "atlas-enshrouded",
+    "name": "Enshrouded",
+    "description": "Enshrouded dedicated server. The game only has a Windows server, so it runs under Proton; the first start sets Proton up and takes a few minutes longer. The server uses a single UDP port, 15637 by convention. The name, port, player slots and difficulty below are written to enshrouded_server.json before every start. The passwords are written to that file's userGroups when the server is installed; edit them there afterwards.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:proton"
+    ],
+    "startup_command": "proton run ./enshrouded_server.exe & ENS_PID=$!; trap 'echo \"[Atlas] Stop requested; waiting for Enshrouded to save and exit...\"' INT TERM; tail -c0 -F ./logs/enshrouded_server.log --pid=\"${ENS_PID}\" 2>/dev/null & while kill -0 \"${ENS_PID}\" 2>/dev/null; do wait \"${ENS_PID}\"; done",
+    "stop_command": "^C",
+    "startup_done": [
+        "[Session] 'HostOnline' (up)!"
+    ],
+    "config_files": {
+        "enshrouded_server.json": {
+            "parser": "json",
+            "find": {
+                "name": "{{server.build.env.SERVER_NAME}}",
+                "queryPort": "{{server.build.default.port}}",
+                "slotCount": "{{server.build.env.MAX_PLAYERS}}",
+                "gameSettingsPreset": "{{server.build.env.DIFFICULTY_PRESET}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/steamcmd.sh",
+        "_scripts/enshrouded.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Atlas Enshrouded Server",
+            "description": "Name shown in the server browser.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players enter to join. Used when the server is installed; a random one is generated when empty. To change it later, edit userGroups in enshrouded_server.json.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Admin Password",
+            "env_variable": "ADMIN_PASSWORD",
+            "default_value": "",
+            "description": "Password that lets a player join as an admin. Used when the server is installed; a random one is generated when empty. It must differ from the server password. To change it later, edit userGroups in enshrouded_server.json.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "16",
+            "description": "Player slots (1-16).",
+            "rules": "required|integer|between:1,16"
+        },
+        {
+            "name": "Difficulty",
+            "env_variable": "DIFFICULTY_PRESET",
+            "default_value": "Default",
+            "description": "Game settings preset. Custom uses the gameSettings section of enshrouded_server.json.",
+            "rules": "required|in:Default,Relaxed,Hard,Survival,Custom"
+        },
+        {
+            "name": "Windows Build",
+            "env_variable": "WINDOWS_INSTALL",
+            "default_value": "1",
+            "description": "Makes SteamCMD download the Windows build, which is the only one this game has.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|in:1"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "2278520",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

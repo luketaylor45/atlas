@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/database"
+	"github.com/luketaylor45/atlas/core/internal/eggfile"
 	"github.com/luketaylor45/atlas/core/internal/models"
 	"github.com/luketaylor45/atlas/core/internal/utils"
 )
@@ -88,6 +89,11 @@ func validateEnvironmentOverrides(raw string, egg *models.Egg, current string, i
 			if strings.ContainsAny(next, "\n\r\x00") {
 				return "", fmt.Errorf("%s must be a single line", variable.Name)
 			}
+			// Only a value that is being changed is checked, so a server
+			// whose stored values predate a rule can still be saved.
+			if err := eggfile.ValidateValue(variable.Rules, next); err != nil {
+				return "", fmt.Errorf("%s %s", variableLabel(variable), err.Error())
+			}
 			value = next
 		}
 		result[key] = value
@@ -113,6 +119,13 @@ func validateEnvironmentOverrides(raw string, egg *models.Egg, current string, i
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+func variableLabel(variable models.EggVariable) string {
+	if name := strings.TrimSpace(variable.Name); name != "" {
+		return name
+	}
+	return variable.EnvironmentVariable
 }
 
 // GetUserOverview returns statistics for the user dashboard
@@ -268,14 +281,13 @@ func ServicePowerAction(c *gin.Context) {
 		return
 	}
 
-	payload := map[string]interface{}{
+	payload := withEggRuntime(map[string]interface{}{
 		"action":          req.Action,
 		"startup_command": resolveStartupCommand(service),
-		"stop_command":    service.Egg.StopCommand,
 		"environment":     mustJSON(mergedEnvironment(service)),
 		"memory":          service.Memory,
 		"port":            service.Port,
-	}
+	}, &service.Egg)
 
 	resp, err := daemonJSON(daemonHTTP, &service.Node, http.MethodPost, fmt.Sprintf("/api/servers/%s/power", service.UUID), payload)
 	if err != nil {
@@ -510,7 +522,7 @@ func UpdateServiceEnvironment(c *gin.Context) {
 	}
 
 	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s", service.UUID))
-	payload := map[string]interface{}{
+	payload := withEggRuntime(map[string]interface{}{
 		"memory":          service.Memory,
 		"disk":            service.Disk,
 		"cpu":             service.Cpu,
@@ -518,7 +530,7 @@ func UpdateServiceEnvironment(c *gin.Context) {
 		"docker_image":    service.DockerImage,
 		"startup_command": resolveStartupCommand(service),
 		"environment":     mustJSON(mergedEnvironment(service)),
-	}
+	}, &service.Egg)
 	body, _ := json.Marshal(payload)
 
 	client := daemonHTTP

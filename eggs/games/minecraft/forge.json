@@ -1,0 +1,64 @@
+{
+    "uuid": "atlas-mc-forge",
+    "name": "Forge",
+    "description": "Minecraft Forge mod loader.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:java_25",
+        "ghcr.io/ptero-eggs/yolks:java_21",
+        "ghcr.io/ptero-eggs/yolks:java_17",
+        "ghcr.io/ptero-eggs/yolks:java_16",
+        "ghcr.io/ptero-eggs/yolks:java_11",
+        "ghcr.io/ptero-eggs/yolks:java_8"
+    ],
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true $( [[ ! -f unix_args.txt ]] && printf %s \"-jar {{SERVER_JARFILE}}\" || printf %s \"@unix_args.txt\" )",
+    "stop_command": "stop",
+    "startup_done": [
+        "Done ("
+    ],
+    "config_files": {
+        "server.properties": {
+            "parser": "properties",
+            "find": {
+                "server-ip": "0.0.0.0",
+                "server-port": "{{server.build.default.port}}",
+                "query.port": "{{server.build.default.port}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/minecraft-java.sh",
+        "_scripts/minecraft-forge.sh"
+    ],
+    "script_container": "ghcr.io/ptero-eggs/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Minecraft Version",
+            "env_variable": "MC_VERSION",
+            "default_value": "latest",
+            "description": "Minecraft version to install Forge for (for example 1.20.1), or 'latest'. Pick the Java image that version runs on: Java 8 up to 1.16.5, 16 for 1.17, 17 for 1.18 to 1.20.4, 21 for 1.20.5 to 1.21.11, 25 after that.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Build Type",
+            "env_variable": "BUILD_TYPE",
+            "default_value": "recommended",
+            "description": "Which Forge build to install for the Minecraft version. Falls back to the latest build when there is no recommended one.",
+            "rules": "required|string|in:recommended,latest"
+        },
+        {
+            "name": "Forge Version",
+            "env_variable": "FORGE_VERSION",
+            "default_value": "",
+            "description": "Optional exact Forge version including the Minecraft version, for example 1.20.1-47.4.28. Overrides Minecraft Version and Build Type.",
+            "rules": "nullable|regex:/^[0-9\\.\\-]+$/"
+        },
+        {
+            "name": "Server Jar File",
+            "env_variable": "SERVER_JARFILE",
+            "default_value": "server.jar",
+            "description": "Name of the Forge jar for Minecraft versions before 1.17. Newer versions start from unix_args.txt and ignore it.",
+            "rules": "required|regex:/^([\\w\\d._-]+)(\\.jar)$/"
+        }
+    ]
+}

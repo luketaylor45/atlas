@@ -1,0 +1,107 @@
+{
+    "uuid": "atlas-cs2",
+    "name": "Counter-Strike 2",
+    "description": "Counter-Strike 2 dedicated server (Steam app 730), installed and updated with SteamCMD. The download is large: allow about 60 GB of disk and at least 4 GB of memory. A Game Server Login Token is needed for the server to be listed publicly.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:sniper"
+    ],
+    "startup_command": "export HOME=/home/container; export LD_LIBRARY_PATH=\"/home/container/game/bin/linuxsteamrt64:${LD_LIBRARY_PATH:-}\"; ./game/bin/linuxsteamrt64/cs2 -dedicated -ip 0.0.0.0 -port {{SERVER_PORT}} -tv_port {{TV_PORT}} -maxplayers {{MAX_PLAYERS}} -usercon $( [ \"${VAC_ENABLED}\" = \"1\" ] || [ \"${VAC_ENABLED}\" = \"true\" ] || printf %s '-insecure' ) +game_type {{GAME_TYPE}} +game_mode {{GAME_MODE}} +map {{SRCDS_MAP}} +hostname \"${SERVER_NAME}\" $( [ -n \"${SERVER_PASSWORD}\" ] && printf '+sv_password %s' \"${SERVER_PASSWORD}\" ) $( [ -n \"${RCON_PASSWORD}\" ] && printf '+rcon_password %s' \"${RCON_PASSWORD}\" ) $( [ -n \"${STEAM_TOKEN}\" ] && printf '+sv_setsteamaccount %s' \"${STEAM_TOKEN}\" )",
+    "stop_command": "quit",
+    "startup_done": [
+        "Connection to Steam servers successful"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "SourceTV",
+            "env": "TV_PORT",
+            "default": 27020,
+            "protocol": "udp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Map",
+            "env_variable": "SRCDS_MAP",
+            "default_value": "de_dust2",
+            "description": "Map the server starts on, for example de_dust2, de_mirage, de_inferno, de_nuke, de_ancient, de_anubis, cs_office or ar_baggage.",
+            "rules": "required|alpha_dash|max:64"
+        },
+        {
+            "name": "Game Type",
+            "env_variable": "GAME_TYPE",
+            "default_value": "0",
+            "description": "Sets the game together with Game Mode. Type 0 with mode 0 is Casual, 0/1 Competitive, 0/2 Wingman, 1/0 Arms Race, 1/2 Deathmatch, 3/0 Custom.",
+            "rules": "required|integer|between:0,6"
+        },
+        {
+            "name": "Game Mode",
+            "env_variable": "GAME_MODE",
+            "default_value": "1",
+            "description": "Sets the game together with Game Type. The defaults (type 0, mode 1) give Competitive.",
+            "rules": "required|integer|between:0,4"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "12",
+            "description": "Highest number of players that can be connected at once.",
+            "rules": "required|integer|between:1,64"
+        },
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Atlas CS2 Server",
+            "description": "Name shown in the server browser. Double quotes are not allowed.",
+            "rules": "required|string|max:64|regex:/^[^\"]+$/"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|alpha_dash|max:30"
+        },
+        {
+            "name": "RCON Password",
+            "env_variable": "RCON_PASSWORD",
+            "default_value": "",
+            "description": "Password for remote console tools, which connect to the game port over TCP. Leave empty to keep RCON disabled.",
+            "rules": "nullable|alpha_dash|max:30"
+        },
+        {
+            "name": "Game Server Login Token",
+            "env_variable": "STEAM_TOKEN",
+            "default_value": "",
+            "description": "32 character token (GSLT) for app 730 from https://steamcommunity.com/dev/managegameservers. Without it the server is not listed publicly and players may only be able to join from the local network or by direct connect.",
+            "rules": "nullable|alpha_num|between:32,32"
+        },
+        {
+            "name": "Valve Anti-Cheat",
+            "env_variable": "VAC_ENABLED",
+            "default_value": "1",
+            "description": "Protect the server with VAC. Turning it off starts the server with -insecure.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Update On Start",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a server update every time the server starts. Turn it off to start faster or to stay on the installed build.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "730",
+            "description": "Steam app id of the dedicated server. Used by the installer and by the update on start; do not change it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:730"
+        }
+    ]
+}

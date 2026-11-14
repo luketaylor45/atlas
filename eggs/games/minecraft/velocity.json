@@ -1,0 +1,61 @@
+{
+    "uuid": "atlas-mc-velocity",
+    "name": "Velocity",
+    "description": "Modern, high performance Minecraft proxy from the PaperMC team.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:java_25",
+        "ghcr.io/ptero-eggs/yolks:java_21",
+        "ghcr.io/ptero-eggs/yolks:java_17",
+        "ghcr.io/ptero-eggs/yolks:java_16",
+        "ghcr.io/ptero-eggs/yolks:java_11",
+        "ghcr.io/ptero-eggs/yolks:java_8"
+    ],
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:MaxInlineLevel=15 -jar {{SERVER_JARFILE}}",
+    "stop_command": "end",
+    "startup_done": [
+        "Done ("
+    ],
+    "config_files": {
+        "velocity.toml": {
+            "parser": "file",
+            "find": {
+                "bind = ": "bind = \"0.0.0.0:{{server.build.default.port}}\""
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/minecraft-velocity.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:alpine",
+    "script_entry": "ash",
+    "variables": [
+        {
+            "name": "Velocity Version",
+            "env_variable": "VELOCITY_VERSION",
+            "default_value": "latest",
+            "description": "Velocity version to install (for example 3.4.0-SNAPSHOT), or 'latest' for the newest release. Velocity 4 needs Java 25; Velocity 3 needs Java 17 or newer.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Build Number",
+            "env_variable": "BUILD_NUMBER",
+            "default_value": "latest",
+            "description": "Velocity build number, or 'latest'.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Server Jar File",
+            "env_variable": "SERVER_JARFILE",
+            "default_value": "velocity.jar",
+            "description": "Name of the proxy jar the startup command runs.",
+            "rules": "required|regex:/^([\\w\\d._-]+)(\\.jar)$/"
+        },
+        {
+            "name": "Download URL",
+            "env_variable": "DL_PATH",
+            "default_value": "",
+            "description": "Optional direct link to a server jar. When set, it is downloaded instead of looking up a version.",
+            "rules": "nullable|string"
+        }
+    ]
+}

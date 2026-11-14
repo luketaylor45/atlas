@@ -3,8 +3,10 @@ import { Save } from 'lucide-react';
 import api from '../../../lib/api';
 import { useAuth } from '../../../context/auth';
 import { errorMessage } from '../../../lib/errors';
+import { variableError } from '../../../lib/rules';
 import { parseJSON, type EggVariable, type Service } from '../../../lib/types';
-import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, Input, Table, Td, Textarea, Th, Tr } from '../../../components/ui';
+import VariableInput from '../../../components/VariableInput';
+import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, Table, Td, Textarea, Th, Tr } from '../../../components/ui';
 
 interface EnvironmentResponse {
     startup_command?: string;
@@ -50,17 +52,23 @@ export function StartupTab({ service, onSaved }: StartupTabProps) {
 
     // Only what changed, and only what this user is allowed to change.
     const changed: Record<string, string> = {};
+    // What is wrong with a changed value. Values left alone are not checked,
+    // here or by the API, so one stored before a rule existed can stay.
+    const errors: Record<string, string> = {};
     for (const variable of variables) {
         const key = variable.environment_variable;
         if (canEdit(variable) && key in edits && edits[key] !== currentValue(variable)) {
             changed[key] = edits[key];
+            const problem = variableError(variable, edits[key]);
+            if (problem) errors[key] = problem;
         }
     }
     const dirty = commandChanged || Object.keys(changed).length > 0;
+    const invalid = Object.keys(errors).length > 0;
 
     const submit = async (event: FormEvent) => {
         event.preventDefault();
-        if (!dirty || saving) return;
+        if (!dirty || invalid || saving) return;
 
         if (commandChanged && !command.trim()) {
             setCommandError('The startup command cannot be empty.');
@@ -146,6 +154,7 @@ export function StartupTab({ service, onSaved }: StartupTabProps) {
                                     key={variable.id ?? key}
                                     label={variable.name || key}
                                     aside={aside}
+                                    error={errors[key]}
                                     hint={
                                         <>
                                             <code className="break-all font-mono">{key}</code>
@@ -154,14 +163,14 @@ export function StartupTab({ service, onSaved }: StartupTabProps) {
                                     }
                                 >
                                     {(field) => (
-                                        <Input
+                                        <VariableInput
                                             {...field}
-                                            type={variable.input_type === 'password' ? 'password' : 'text'}
-                                            autoComplete={variable.input_type === 'password' ? 'new-password' : 'off'}
+                                            variable={variable}
                                             value={edits[key] ?? currentValue(variable)}
+                                            original={currentValue(variable)}
                                             disabled={!editable}
-                                            onChange={(event) => {
-                                                setEdits((current) => ({ ...current, [key]: event.target.value }));
+                                            onChange={(next) => {
+                                                setEdits((current) => ({ ...current, [key]: next }));
                                                 setResult(null);
                                             }}
                                         />
@@ -216,9 +225,13 @@ export function StartupTab({ service, onSaved }: StartupTabProps) {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-sm text-muted">
-                    {dirty ? 'You have unsaved changes.' : 'Changes apply the next time the server starts.'}
+                    {invalid
+                        ? 'Some values are not valid yet. Check the highlighted fields.'
+                        : dirty
+                          ? 'You have unsaved changes.'
+                          : 'Changes apply the next time the server starts.'}
                 </p>
-                <Button type="submit" variant="primary" loading={saving} disabled={!dirty} icon={<Save size={16} aria-hidden />}>
+                <Button type="submit" variant="primary" loading={saving} disabled={!dirty || invalid} icon={<Save size={16} aria-hidden />}>
                     Save changes
                 </Button>
             </div>

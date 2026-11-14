@@ -7,6 +7,28 @@ Atlas is a game server hosting panel designed for performance, modularity, and s
 *   **Distributed Architecture**: Deploy multiple game nodes globally from a single panel.
 *   **Hardened Security**: Internal services (API/Database) are hidden from the public by default.
 
+## 🎮 Games
+
+Atlas ships with eggs for these servers. Each one installs itself, is told
+which ports it was given, and shows as *Starting* until it is ready for players.
+
+| Category | Eggs |
+| --- | --- |
+| Minecraft | Vanilla, Paper, Purpur, Fabric, Forge, NeoForge, Velocity (proxy), Bedrock |
+| Survival | Palworld, Valheim, Rust, ARK: Survival Evolved, ARK: Survival Ascended, 7 Days to Die, Satisfactory, Enshrouded, Project Zomboid |
+| Source Engine | Garry's Mod, Counter-Strike 2, Team Fortress 2, Left 4 Dead 2 |
+| Sandbox & Other | Terraria, tModLoader, Factorio, FiveM |
+
+Anything else can be added under **Admin > Eggs > Import**, which reads
+Pterodactyl and Pelican egg files as they are: config-file rules, startup
+detection, the stop command and variable rules are all carried over, and
+variables that are clearly extra ports (`QUERY_PORT`, `RCON_PORT`, ...) become
+ports Atlas allocates. The egg format, and how to write your own, is described
+in [`eggs/README.md`](eggs/README.md).
+
+Some games are large (Counter-Strike 2 needs about 60 GB, ARK about 30 GB) and
+some need a lot of memory; each egg's description says what to allow for.
+
 ## 📦 Production Deployment (Ubuntu)
 
 Atlas runs entirely within Docker Compose. For the best experience, we recommend using an Nginx Reverse Proxy on the host.

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,8 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/luketaylor45/atlas/core/internal/config"
 	"github.com/luketaylor45/atlas/core/internal/database"
+	"github.com/luketaylor45/atlas/core/internal/eggfile"
 	"github.com/luketaylor45/atlas/core/internal/models"
-	"gorm.io/gorm"
 )
 
 const catalogSource = "catalog"
@@ -23,42 +24,6 @@ const catalogSource = "catalog"
 type JSONNest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-}
-
-// JSONEgg is an egg file in the catalog.
-type JSONEgg struct {
-	UUID            string           `json:"uuid"`
-	Name            string           `json:"name"`
-	Author          string           `json:"author"`
-	Description     string           `json:"description"`
-	DockerImages    []string         `json:"docker_images"`
-	StartupCommand  string           `json:"startup_command"`
-	StopCommand     string           `json:"stop_command"`
-	ScriptInstall   string           `json:"script_install"`
-	ScriptContainer string           `json:"script_container"`
-	ScriptEntry     string           `json:"script_entry"`
-	Ports           []models.EggPort `json:"ports"`
-	Variables       []JSONEggVar     `json:"variables"`
-}
-
-// JSONEggVar is one variable of a catalog egg. The visibility flags are
-// pointers so that leaving them out means "yes", not "no".
-type JSONEggVar struct {
-	Name         string `json:"name"`
-	EnvVariable  string `json:"env_variable"`
-	DefaultValue string `json:"default_value"`
-	UserEditable *bool  `json:"user_editable"`
-	UserViewable *bool  `json:"user_viewable"`
-	InputType    string `json:"input_type"`
-	Rules        string `json:"rules"`
-	Description  string `json:"description"`
-}
-
-func boolOr(value *bool, fallback bool) bool {
-	if value == nil {
-		return fallback
-	}
-	return *value
 }
 
 func main() {
@@ -104,7 +69,7 @@ func scanEggsDirectory() {
 			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "nest.json" {
 				continue
 			}
-			eggUUID, ok := importEgg(filepath.Join(dir, entry.Name()), nest)
+			eggUUID, ok := importEgg(root, filepath.Join(dir, entry.Name()), nest)
 			if !ok {
 				parseFailures++
 				continue
@@ -114,7 +79,8 @@ func scanEggsDirectory() {
 	}
 
 	for _, top := range topLevels {
-		if !top.IsDir() {
+		// Directories starting with "_" hold shared files, not eggs.
+		if !top.IsDir() || strings.HasPrefix(top.Name(), "_") {
 			continue
 		}
 		topPath := filepath.Join(root, top.Name())
@@ -128,7 +94,7 @@ func scanEggsDirectory() {
 
 		subLevels, _ := os.ReadDir(topPath)
 		for _, sub := range subLevels {
-			if !sub.IsDir() {
+			if !sub.IsDir() || strings.HasPrefix(sub.Name(), "_") {
 				continue
 			}
 			subPath := filepath.Join(topPath, sub.Name())
@@ -146,8 +112,13 @@ func scanEggsDirectory() {
 	// removed, so nothing is retired on a run with failures.
 	if parseFailures > 0 {
 		log.Printf("[Seed] %d egg file(s) could not be read; no eggs were retired this run.", parseFailures)
+	} else if len(present) == 0 {
+		// An empty catalog is far more likely to be a missing mount than a
+		// decision to drop every game.
+		log.Printf("[Seed] The catalog holds no eggs; nothing was retired.")
 	} else {
-		retireRemovedEggs(seededNests, present)
+		retireRemovedEggs(present)
+		pruneCatalog(seededNests)
 	}
 	log.Printf("[Seed] Processed %d catalog eggs.", len(present))
 }
@@ -172,19 +143,66 @@ func isCatalogEgg(egg *models.Egg) bool {
 }
 
 // retireRemovedEggs hides catalog eggs whose file was deleted. They are not
-// removed, because existing servers may still depend on them.
-func retireRemovedEggs(nestIDs []uint, present map[string]bool) {
-	if len(nestIDs) == 0 {
-		return
-	}
+// removed here, because existing servers may still depend on them.
+func retireRemovedEggs(present map[string]bool) {
 	var eggs []models.Egg
-	database.DB.Where("nest_id IN ? AND available = ?", nestIDs, true).Find(&eggs)
+	database.DB.Where("available = ?", true).Find(&eggs)
 	for _, egg := range eggs {
 		if !isCatalogEgg(&egg) || present[egg.UUID] {
 			continue
 		}
 		database.DB.Model(&models.Egg{}).Where("id = ?", egg.ID).Update("available", false)
 		log.Printf("[Seed] Retired egg no longer in the catalog: %s", egg.Name)
+	}
+}
+
+// pruneCatalog removes what the catalog left behind: retired catalog eggs
+// that no server uses, and catalog nests whose directory is gone and that
+// hold nothing any more. Anything still in use is kept.
+func pruneCatalog(seededNests []uint) {
+	var retired []models.Egg
+	database.DB.Where("available = ?", false).Find(&retired)
+	for _, egg := range retired {
+		if !isCatalogEgg(&egg) {
+			continue
+		}
+		var inUse int64
+		database.DB.Unscoped().Model(&models.Service{}).Where("egg_id = ?", egg.ID).Count(&inUse)
+		if inUse > 0 {
+			continue
+		}
+		database.DB.Where("egg_id = ?", egg.ID).Delete(&models.EggVariable{})
+		if err := database.DB.Delete(&models.Egg{}, egg.ID).Error; err != nil {
+			log.Printf("[Seed] Could not remove retired egg %s: %v", egg.Name, err)
+			continue
+		}
+		log.Printf("[Seed] Removed retired egg: %s", egg.Name)
+	}
+
+	// Catalog nests carry the name of their directory as their code; nests
+	// made in the panel have none and are never touched. Sub-nests go first
+	// so a parent emptied by this run can go too.
+	seeded := make(map[uint]bool, len(seededNests))
+	for _, id := range seededNests {
+		seeded[id] = true
+	}
+	var nests []models.Nest
+	database.DB.Where("code <> ''").Order("parent_id IS NULL, id").Find(&nests)
+	for _, nest := range nests {
+		if seeded[nest.ID] {
+			continue
+		}
+		var eggs, children int64
+		database.DB.Model(&models.Egg{}).Where("nest_id = ?", nest.ID).Count(&eggs)
+		database.DB.Model(&models.Nest{}).Where("parent_id = ?", nest.ID).Count(&children)
+		if eggs > 0 || children > 0 {
+			continue
+		}
+		if err := database.DB.Delete(&models.Nest{}, nest.ID).Error; err != nil {
+			log.Printf("[Seed] Could not remove empty nest %s: %v", nest.Name, err)
+			continue
+		}
+		log.Printf("[Seed] Removed empty catalog nest: %s", nest.Name)
 	}
 }
 
@@ -236,80 +254,82 @@ func titleCase(value string) string {
 // An egg is only written when its file changed since it was last loaded, and
 // never when an admin has edited it in the panel: restarting Core must not
 // undo an admin's work.
-func importEgg(path string, nest models.Nest) (string, bool) {
+func importEgg(root string, path string, nest models.Nest) (string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("[Seed] Failed to read egg file %s: %v", path, err)
 		return "", false
 	}
 
-	var file JSONEgg
-	if err := json.Unmarshal(data, &file); err != nil {
-		log.Printf("[Seed] Failed to parse egg JSON %s: %v", path, err)
+	parsed, err := eggfile.Parse(data)
+	if err != nil {
+		log.Printf("[Seed] Failed to read egg %s: %v", path, err)
 		return "", false
 	}
-	if file.UUID == "" || file.Name == "" || file.StartupCommand == "" {
-		log.Printf("[Seed] Skipping %s: uuid, name and startup_command are required", path)
+	if parsed.UUID == "" {
+		log.Printf("[Seed] Skipping %s: catalog eggs need a uuid", path)
 		return "", false
 	}
 
-	sum := sha256.Sum256(data)
-	hash := hex.EncodeToString(sum[:])
-
-	imagesJSON, _ := json.Marshal(file.DockerImages)
-	portsJSON := ""
-	if len(file.Ports) > 0 {
-		encoded, _ := json.Marshal(file.Ports)
-		portsJSON = string(encoded)
+	// Shared install scripts are joined in front of the egg's own script.
+	// They are part of the egg, so they are part of its hash too.
+	hasher := sha256.New()
+	hasher.Write(data)
+	var script strings.Builder
+	for _, name := range parsed.ScriptFiles {
+		content, err := readCatalogScript(root, name)
+		if err != nil {
+			log.Printf("[Seed] Skipping %s: %v", path, err)
+			return "", false
+		}
+		hasher.Write(content)
+		script.Write(content)
+		if !strings.HasSuffix(script.String(), "\n") {
+			script.WriteString("\n")
+		}
 	}
-	author := file.Author
-	if author == "" {
-		author = "Atlas"
+	script.WriteString(parsed.Egg.ScriptInstall)
+	hash := hex.EncodeToString(hasher.Sum(nil))
+
+	egg := parsed.Egg
+	egg.ScriptInstall = script.String()
+	if egg.Author == "" {
+		egg.Author = "Atlas"
 	}
 
 	fields := map[string]interface{}{
 		"nest_id":          nest.ID,
 		"available":        true,
-		"author":           author,
-		"name":             file.Name,
-		"description":      file.Description,
-		"docker_images":    string(imagesJSON),
-		"startup_command":  file.StartupCommand,
-		"stop_command":     file.StopCommand,
-		"script_install":   file.ScriptInstall,
-		"script_container": file.ScriptContainer,
-		"script_entry":     file.ScriptEntry,
-		"ports":            portsJSON,
+		"author":           egg.Author,
+		"name":             egg.Name,
+		"description":      egg.Description,
+		"docker_images":    egg.DockerImages,
+		"startup_command":  egg.StartupCommand,
+		"stop_command":     egg.StopCommand,
+		"startup_done":     egg.StartupDone,
+		"config":           egg.ConfigFiles,
+		"script_install":   egg.ScriptInstall,
+		"script_container": egg.ScriptContainer,
+		"script_entry":     egg.ScriptEntry,
+		"ports":            egg.Ports,
 		"source":           catalogSource,
 		"seed_hash":        hash,
 	}
 
 	var existing models.Egg
-	err = database.DB.Where("uuid = ?", file.UUID).First(&existing).Error
+	err = database.DB.Where("uuid = ?", parsed.UUID).First(&existing).Error
 	switch {
 	case err != nil:
-		egg := models.Egg{
-			UUID:            file.UUID,
-			NestID:          nest.ID,
-			Available:       true,
-			Author:          author,
-			Name:            file.Name,
-			Description:     file.Description,
-			DockerImages:    string(imagesJSON),
-			StartupCommand:  file.StartupCommand,
-			StopCommand:     file.StopCommand,
-			ScriptInstall:   file.ScriptInstall,
-			ScriptContainer: file.ScriptContainer,
-			ScriptEntry:     file.ScriptEntry,
-			Ports:           portsJSON,
-			Source:          catalogSource,
-			SeedHash:        hash,
-		}
+		egg.UUID = parsed.UUID
+		egg.NestID = nest.ID
+		egg.Available = true
+		egg.Source = catalogSource
+		egg.SeedHash = hash
 		if err := database.DB.Create(&egg).Error; err != nil {
-			log.Printf("[Seed] Failed to create egg %s: %v", file.Name, err)
+			log.Printf("[Seed] Failed to create egg %s: %v", egg.Name, err)
 			return "", false
 		}
-		syncVariables(egg.ID, file.Variables)
+		syncVariables(egg.ID, parsed.Variables)
 		log.Printf("[Seed] Added egg: %s -> %s", nest.Name, egg.Name)
 
 	case existing.Customized:
@@ -329,57 +349,56 @@ func importEgg(path string, nest models.Nest) (string, bool) {
 		}
 
 	default:
-		err := database.DB.Transaction(func(tx *gorm.DB) error {
-			return tx.Model(&models.Egg{}).Where("id = ?", existing.ID).Updates(fields).Error
-		})
-		if err != nil {
-			log.Printf("[Seed] Failed to update egg %s: %v", file.Name, err)
+		if err := database.DB.Model(&models.Egg{}).Where("id = ?", existing.ID).Updates(fields).Error; err != nil {
+			log.Printf("[Seed] Failed to update egg %s: %v", egg.Name, err)
 			return "", false
 		}
-		syncVariables(existing.ID, file.Variables)
-		log.Printf("[Seed] Updated egg from catalog: %s", file.Name)
+		syncVariables(existing.ID, parsed.Variables)
+		log.Printf("[Seed] Updated egg from catalog: %s", egg.Name)
 	}
 
-	return file.UUID, true
+	return parsed.UUID, true
+}
+
+// readCatalogScript reads an install script named by an egg. The name is
+// relative to the catalog root and may not lead outside it.
+func readCatalogScript(root string, name string) ([]byte, error) {
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("install script %q is outside the catalog", name)
+	}
+	content, err := os.ReadFile(filepath.Join(root, clean))
+	if err != nil {
+		return nil, fmt.Errorf("install script %q could not be read: %w", name, err)
+	}
+	// Scripts edited on Windows must not reach a Linux shell with CRLF endings.
+	return []byte(strings.ReplaceAll(strings.TrimPrefix(string(content), "\ufeff"), "\r\n", "\n")), nil
 }
 
 // syncVariables makes an egg's variables match its catalog file: new ones are
 // added, changed ones updated and ones no longer listed removed.
-func syncVariables(eggID uint, variables []JSONEggVar) {
+func syncVariables(eggID uint, variables []models.EggVariable) {
 	keep := make([]string, 0, len(variables))
 	for _, variable := range variables {
-		if variable.EnvVariable == "" {
-			continue
-		}
-		keep = append(keep, variable.EnvVariable)
+		keep = append(keep, variable.EnvironmentVariable)
 
-		inputType := variable.InputType
-		if inputType == "" {
-			inputType = "text"
-		}
 		fields := map[string]interface{}{
 			"name":          variable.Name,
 			"description":   variable.Description,
 			"default_value": variable.DefaultValue,
-			"user_editable": boolOr(variable.UserEditable, true),
-			"user_viewable": boolOr(variable.UserViewable, true),
+			"user_editable": variable.UserEditable,
+			"user_viewable": variable.UserViewable,
 			"rules":         variable.Rules,
-			"input_type":    inputType,
+			"input_type":    variable.InputType,
 		}
 
 		var existing models.EggVariable
-		if err := database.DB.Where("egg_id = ? AND environment_variable = ?", eggID, variable.EnvVariable).First(&existing).Error; err != nil {
-			created := models.EggVariable{
-				EggID:               eggID,
-				Name:                variable.Name,
-				Description:         variable.Description,
-				EnvironmentVariable: variable.EnvVariable,
-				DefaultValue:        variable.DefaultValue,
-				Rules:               variable.Rules,
-				InputType:           inputType,
-			}
+		if err := database.DB.Where("egg_id = ? AND environment_variable = ?", eggID, variable.EnvironmentVariable).First(&existing).Error; err != nil {
+			created := variable
+			created.ID = 0
+			created.EggID = eggID
 			if err := database.DB.Create(&created).Error; err != nil {
-				log.Printf("[Seed] Failed to create variable %s: %v", variable.EnvVariable, err)
+				log.Printf("[Seed] Failed to create variable %s: %v", variable.EnvironmentVariable, err)
 				continue
 			}
 			// Written separately: a false value would otherwise be replaced

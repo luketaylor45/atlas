@@ -44,6 +44,8 @@ export interface EggPort {
     env: string;
     default?: number;
     protocol?: string;
+    /** Set when the game derives this port itself: it is always the primary port plus this. */
+    offset?: number;
 }
 
 export interface Egg {
@@ -59,6 +61,10 @@ export interface Egg {
     docker_images: string;
     startup_command: string;
     stop_command: string;
+    /** JSON-encoded string[] of console texts that mean the server has finished starting. Empty when there are none. */
+    startup_done: string;
+    /** JSON-encoded object of the files rewritten before every start, shaped like Pterodactyl's config.files. Empty when there are none. */
+    config_files: string;
     /** Empty for non-admins. */
     script_install: string;
     script_entry: string;
@@ -199,4 +205,16 @@ export function eggImages(egg: Pick<Egg, 'docker_images'> | null | undefined): s
 export function eggPorts(egg: Pick<Egg, 'ports'> | null | undefined): EggPort[] {
     const ports = parseJSON<unknown>(egg?.ports, []);
     return Array.isArray(ports) ? ports.filter((port): port is EggPort => Boolean(port && (port as EggPort).env)) : [];
+}
+
+/** The console texts that mean a server of this egg has finished starting. */
+export function eggStartupDone(egg: Pick<Egg, 'startup_done'> | null | undefined): string[] {
+    const done = parseJSON<unknown>(egg?.startup_done, []);
+    return Array.isArray(done) ? done.filter((text): text is string => typeof text === 'string') : [];
+}
+
+/** The names of the files this egg rewrites before every start. */
+export function eggConfigFiles(egg: Pick<Egg, 'config_files'> | null | undefined): string[] {
+    const files = parseJSON<unknown>(egg?.config_files, {});
+    return files && typeof files === 'object' && !Array.isArray(files) ? Object.keys(files) : [];
 }

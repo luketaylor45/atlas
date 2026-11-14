@@ -1,0 +1,65 @@
+{
+    "uuid": "atlas-l4d2",
+    "name": "Left 4 Dead 2",
+    "description": "Left 4 Dead 2 dedicated server (Steam app 222860). Steam only lets an anonymous login download the Linux server after the Windows one, so the install downloads both and takes a while. Allow about 20 GB of disk and at least 2 GB of memory.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/games:source"
+    ],
+    "startup_command": "export HOME=/home/container; ./srcds_run -game left4dead2 -console -port {{SERVER_PORT}} +ip 0.0.0.0 -strictportbind -norestart +mp_gamemode {{GAME_MODE}} +map {{SRCDS_MAP}} +hostname \"\\\"${SERVER_NAME}\\\"\" $( [ -n \"${RCON_PASSWORD}\" ] && printf '+rcon_password %s' \"${RCON_PASSWORD}\" )",
+    "stop_command": "quit",
+    "startup_done": [
+        "Connection to Steam servers successful",
+        "gameserver Steam ID"
+    ],
+    "script_install_files": [
+        "_scripts/l4d2.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Map",
+            "env_variable": "SRCDS_MAP",
+            "default_value": "c1m1_hotel",
+            "description": "Map the server starts on. Campaign maps are named c<campaign>m<chapter>, for example c1m1_hotel (Dead Center) or c2m1_highway (Dark Carnival).",
+            "rules": "required|alpha_dash|max:64"
+        },
+        {
+            "name": "Game Mode",
+            "env_variable": "GAME_MODE",
+            "default_value": "coop",
+            "description": "Game mode the server starts in: coop, realism, survival, versus, scavenge or a mutation such as mutation12.",
+            "rules": "required|alpha_num|max:32"
+        },
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Atlas L4D2 Server",
+            "description": "Name shown in the server browser. A hostname line in left4dead2/cfg/server.cfg overrides it. Letters, numbers, spaces and _ . , : ! # ( ) + @ - only.",
+            "rules": "required|string|max:64|regex:/^[A-Za-z0-9 _.,:!#()+@-]+$/"
+        },
+        {
+            "name": "RCON Password",
+            "env_variable": "RCON_PASSWORD",
+            "default_value": "",
+            "description": "Password for remote console tools, which connect to the game port over TCP. Leave empty to keep RCON disabled.",
+            "rules": "nullable|alpha_dash|max:30"
+        },
+        {
+            "name": "Update On Start",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a server update every time the server starts. If an update cannot be downloaded this way, reinstall the server to update it.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "222860",
+            "description": "Steam app id of the dedicated server. Used by the installer and by the update on start; do not change it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:222860"
+        }
+    ]
+}

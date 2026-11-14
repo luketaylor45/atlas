@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Download, Egg as EggIcon, FolderPlus, Pencil, Search, Trash2 } from 'lucide-react';
 import api from '../../lib/api';
 import { errorMessage } from '../../lib/errors';
-import type { Egg, Nest } from '../../lib/types';
+import { eggConfigFiles, eggStartupDone, type Egg, type Nest } from '../../lib/types';
 import {
     Alert,
     Badge,
@@ -188,6 +188,12 @@ export default function AdminEggsPage() {
             <ul className="divide-y divide-border">
                 {eggs.map((egg) => {
                     const variableCount = egg.variables?.length ?? 0;
+                    const configCount = eggConfigFiles(egg).length;
+                    const summary = [
+                        `${variableCount} ${variableCount === 1 ? 'variable' : 'variables'}`,
+                        configCount > 0 ? `${configCount} ${configCount === 1 ? 'config file' : 'config files'}` : '',
+                        eggStartupDone(egg).length > 0 ? 'startup detection' : '',
+                    ].filter(Boolean);
                     return (
                         <li key={egg.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-5">
                             <div className="min-w-0 flex-1 basis-56">
@@ -202,9 +208,7 @@ export default function AdminEggsPage() {
                                 </div>
                                 {egg.description && <p className="mt-0.5 line-clamp-2 text-sm text-muted">{egg.description}</p>}
                             </div>
-                            <span className="tabular shrink-0 whitespace-nowrap text-sm text-muted">
-                                {variableCount} {variableCount === 1 ? 'variable' : 'variables'}
-                            </span>
+                            <span className="tabular shrink-0 whitespace-nowrap text-sm text-muted">{summary.join(' · ')}</span>
                             <div className="ml-auto flex shrink-0 items-center gap-1">
                                 <IconButton label={`Edit ${egg.name}`} size="sm" onClick={() => setEditingEgg(egg)}>
                                     <Pencil size={16} aria-hidden />

@@ -5,7 +5,9 @@ import api from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { errorMessage, errorStatus } from '../../lib/errors';
 import { formatCpu, formatMB } from '../../lib/format';
+import { variableError } from '../../lib/rules';
 import { eggImages, eggPorts, type Egg, type Nest, type Node, type Service, type User } from '../../lib/types';
+import VariableInput from '../../components/VariableInput';
 import {
     Alert,
     Button,
@@ -120,6 +122,16 @@ export default function CreateServicePage() {
     const eggVariables = egg?.variables ?? [];
     const node = options?.nodes.find((item) => String(item.id) === nodeId) ?? null;
 
+    // What is wrong with a variable that was changed. A value left at the
+    // egg's default is not checked, here or by the API.
+    const variableErrors: Record<string, string> = {};
+    for (const variable of eggVariables) {
+        const value = variables[variable.environment_variable] ?? variable.default_value ?? '';
+        if (value === (variable.default_value ?? '')) continue;
+        const problem = variableError(variable, value);
+        if (problem) variableErrors[variable.environment_variable] = problem;
+    }
+
     const visibleSections = useMemo(() => {
         const term = eggSearch.trim().toLowerCase();
         if (!term) return sections;
@@ -191,6 +203,11 @@ export default function CreateServicePage() {
         const extra: Record<string, number> = {};
         const taken = new Set<number>(portValue === null ? [] : [portValue]);
         for (const item of ports) {
+            // A port the game derives from its game port is not a choice.
+            if (item.offset) {
+                if (portValue !== null) taken.add(portValue + item.offset);
+                continue;
+            }
             const raw = (extraPorts[item.env] ?? '').trim();
             if (!raw) continue;
             const value = portNumber(raw);
@@ -208,6 +225,7 @@ export default function CreateServicePage() {
         setFormError('');
         if (
             Object.keys(next).length > 0 ||
+            Object.keys(variableErrors).length > 0 ||
             !egg ||
             ownerValue === null ||
             nodeValue === null ||
@@ -593,6 +611,26 @@ export default function CreateServicePage() {
                         </Field>
                         {ports.map((item) => {
                             const hasDefault = typeof item.default === 'number' && item.default > 0;
+                            if (item.offset) {
+                                const gamePort = portNumber(port);
+                                return (
+                                    <Field
+                                        key={item.env}
+                                        label={`${item.name || item.env} port`}
+                                        aside={protocolLabel(item.protocol)}
+                                        hint={`This game always uses its game port plus ${item.offset} here, so that port must be free too.`}
+                                    >
+                                        {(field) => (
+                                            <Input
+                                                {...field}
+                                                disabled
+                                                value={gamePort === null ? '' : String(gamePort + item.offset!)}
+                                                placeholder={`Game port plus ${item.offset}`}
+                                            />
+                                        )}
+                                    </Field>
+                                );
+                            }
                             return (
                                 <Field
                                     key={item.env}
@@ -644,6 +682,7 @@ export default function CreateServicePage() {
                                             </span>
                                         )
                                     }
+                                    error={variableErrors[variable.environment_variable]}
                                     hint={
                                         <>
                                             {variable.description && <span className="block">{variable.description}</span>}
@@ -652,15 +691,15 @@ export default function CreateServicePage() {
                                     }
                                 >
                                     {(field) => (
-                                        <Input
+                                        <VariableInput
                                             {...field}
-                                            value={variables[variable.environment_variable] ?? ''}
-                                            spellCheck={false}
-                                            autoComplete="off"
-                                            onChange={(event) =>
+                                            variable={variable}
+                                            value={variables[variable.environment_variable] ?? variable.default_value ?? ''}
+                                            original={variable.default_value ?? ''}
+                                            onChange={(next) =>
                                                 setVariables((current) => ({
                                                     ...current,
-                                                    [variable.environment_variable]: event.target.value,
+                                                    [variable.environment_variable]: next,
                                                 }))
                                             }
                                         />

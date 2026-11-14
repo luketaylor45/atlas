@@ -243,6 +243,84 @@ func purgeService(service *models.Service) error {
 	})
 }
 
+// moveServicePorts gives a service a new primary port. Ports the game derives
+// from the primary one (see EggPort.Offset) move with it; the service's other
+// ports stay where they are.
+func moveServicePorts(tx *gorm.DB, service *models.Service, newPort int) error {
+	var egg models.Egg
+	derived := map[string]models.EggPort{}
+	if err := tx.First(&egg, service.EggID).Error; err == nil {
+		for _, port := range eggPorts(&egg) {
+			if port.Offset != 0 {
+				derived[port.Env] = port
+			}
+		}
+	}
+
+	// Everything held by other services, plus this service's own ports that
+	// are staying put.
+	used, err := usedNodePorts(tx, service.NodeID, service.ID)
+	if err != nil {
+		return err
+	}
+	var own []models.ServicePort
+	if err := tx.Where("service_id = ?", service.ID).Find(&own).Error; err != nil {
+		return err
+	}
+	hasPrimary := false
+	for _, port := range own {
+		_, moves := derived[port.Env]
+		if port.IsPrimary {
+			hasPrimary = true
+		} else if !moves {
+			used[port.Port] = true
+		}
+	}
+
+	if used[newPort] {
+		return &portTakenError{Port: newPort}
+	}
+	targets := map[string]int{}
+	claimed := map[int]bool{newPort: true}
+	for env, port := range derived {
+		target := newPort + port.Offset
+		if err := validateServicePort(target); err != nil {
+			return fmt.Errorf("%s (the game port plus %d): %w", port.Name, port.Offset, err)
+		}
+		if used[target] || claimed[target] {
+			return &derivedPortTakenError{portTakenError: portTakenError{Port: target}, Name: port.Name, Offset: port.Offset}
+		}
+		claimed[target] = true
+		targets[env] = target
+	}
+
+	// The derived rows are removed first so that shifting every port by one
+	// never trips over the service's own old allocations.
+	for env := range derived {
+		if err := tx.Where("service_id = ? AND env = ? AND is_primary = ?", service.ID, env, false).Delete(&models.ServicePort{}).Error; err != nil {
+			return err
+		}
+	}
+	if hasPrimary {
+		if err := tx.Model(&models.ServicePort{}).Where("service_id = ? AND is_primary = ?", service.ID, true).Update("port", newPort).Error; err != nil {
+			return err
+		}
+	} else {
+		primary := models.ServicePort{ServiceID: service.ID, NodeID: service.NodeID, Port: newPort, Env: models.PrimaryPortEnv, Name: "Game", Protocol: "both", IsPrimary: true}
+		if err := tx.Create(&primary).Error; err != nil {
+			return err
+		}
+	}
+	for env, target := range targets {
+		port := derived[env]
+		row := models.ServicePort{ServiceID: service.ID, NodeID: service.NodeID, Port: target, Env: env, Name: port.Name, Protocol: normalizeProtocol(port.Protocol)}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DeleteService removes a service from its node and then from the database.
 // If the node cannot be reached the service is kept, because deleting only
 // the record would orphan its container, files and ports. An admin can pass
@@ -370,24 +448,8 @@ func UpdateService(c *gin.Context) {
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		if newPort != existing.Port {
-			used, err := usedNodePorts(tx, existing.NodeID, 0)
-			if err != nil {
+			if err := moveServicePorts(tx, &existing, newPort); err != nil {
 				return err
-			}
-			if used[newPort] {
-				return &portTakenError{Port: newPort}
-			}
-			result := tx.Model(&models.ServicePort{}).
-				Where("service_id = ? AND is_primary = ?", existing.ID, true).
-				Update("port", newPort)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected == 0 {
-				port := models.ServicePort{ServiceID: existing.ID, NodeID: existing.NodeID, Port: newPort, Env: models.PrimaryPortEnv, Name: "Game", Protocol: "both", IsPrimary: true}
-				if err := tx.Create(&port).Error; err != nil {
-					return err
-				}
 			}
 		}
 		if len(updates) == 0 {
@@ -396,6 +458,11 @@ func UpdateService(c *gin.Context) {
 		return tx.Model(&models.Service{}).Where("id = ?", existing.ID).Updates(updates).Error
 	})
 	if err != nil {
+		var derivedTaken *derivedPortTakenError
+		if errors.As(err, &derivedTaken) {
+			c.JSON(http.StatusConflict, gin.H{"error": derivedTaken.Error()})
+			return
+		}
 		if errors.Is(err, errPortTaken) || isUniqueViolation(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": (&portTakenError{Port: newPort}).Error()})
 			return
@@ -419,7 +486,7 @@ func UpdateService(c *gin.Context) {
 	case needsRebuild:
 		nodeErr = rebuildOnNode(service)
 	case service.Status != StatusInstalling && service.Status != StatusInstallationFailed:
-		nodeErr = daemonDo(daemonHTTP, &service.Node, http.MethodPut, "/api/servers/"+service.UUID, map[string]interface{}{
+		nodeErr = daemonDo(daemonHTTP, &service.Node, http.MethodPut, "/api/servers/"+service.UUID, withEggRuntime(map[string]interface{}{
 			"memory":          service.Memory,
 			"disk":            service.Disk,
 			"cpu":             service.Cpu,
@@ -427,7 +494,7 @@ func UpdateService(c *gin.Context) {
 			"docker_image":    service.DockerImage,
 			"startup_command": resolveStartupCommand(service),
 			"environment":     mustJSON(mergedEnvironment(service)),
-		})
+		}, &service.Egg))
 	}
 	if nodeErr != nil {
 		log.Printf("[Core] Failed to apply update for service %s on its node: %v", service.UUID, nodeErr)

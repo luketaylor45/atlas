@@ -1,0 +1,137 @@
+{
+    "uuid": "atlas-factorio",
+    "name": "Factorio",
+    "description": "Factorio headless server from factorio.com. The game uses UDP on the primary port (Factorio's usual port is 34197). The map is created on first start. Allow 2 GB of disk and at least 2 GB of memory; large factories need more.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:debian"
+    ],
+    "startup_command": "{ [ -f \"saves/{{SAVE_NAME}}.zip\" ] || ./bin/x64/factorio --create \"saves/{{SAVE_NAME}}.zip\" --map-gen-settings data/map-gen-settings.json --map-settings data/map-settings.json; } && ./bin/x64/factorio --start-server \"saves/{{SAVE_NAME}}.zip\" --port {{SERVER_PORT}} --server-settings data/server-settings.json $( [ -n \"${RCON_PASSWORD}\" ] && printf -- '--rcon-port %s --rcon-password %s' \"{{RCON_PORT}}\" \"${RCON_PASSWORD}\" )",
+    "stop_command": "/quit",
+    "startup_done": [
+        "Hosting game at",
+        "changing state from(CreatingGame) to(InGame)"
+    ],
+    "config_files": {
+        "data/server-settings.json": {
+            "parser": "json",
+            "find": {
+                "name": "{{server.build.env.SERVER_NAME}}",
+                "description": "{{server.build.env.SERVER_DESC}}",
+                "max_players": "{{server.build.env.MAX_SLOTS}}",
+                "game_password": "{{server.build.env.SERVER_PASSWORD}}",
+                "visibility.public": "{{server.build.env.SERVER_PUBLIC}}",
+                "username": "{{server.build.env.SERVER_USERNAME}}",
+                "token": "{{server.build.env.SERVER_TOKEN}}",
+                "autosave_interval": "{{server.build.env.SAVE_INTERVAL}}",
+                "autosave_slots": "{{server.build.env.SAVE_SLOTS}}",
+                "afk_autokick_interval": "{{server.build.env.AFK_KICK}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/factorio.sh"
+    ],
+    "script_container": "ghcr.io/ptero-eggs/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "RCON",
+            "env": "RCON_PORT",
+            "default": 27015,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Factorio Version",
+            "env_variable": "FACTORIO_VERSION",
+            "default_value": "latest",
+            "description": "Version to install: 'latest' (newest stable), 'experimental' or an exact version such as 2.0.72. Reinstall the server to change it.",
+            "rules": "required|string|max:12"
+        },
+        {
+            "name": "Save Name",
+            "env_variable": "SAVE_NAME",
+            "default_value": "world",
+            "description": "Name of the save in saves/ that the server loads. A new map with this name is generated from data/map-gen-settings.json if it does not exist yet.",
+            "rules": "required|alpha_dash|max:64"
+        },
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Factorio Server",
+            "description": "Name of the game as it appears in the server list.",
+            "rules": "required|string|max:100"
+        },
+        {
+            "name": "Server Description",
+            "env_variable": "SERVER_DESC",
+            "default_value": "",
+            "description": "Description of the game as it appears in the server list.",
+            "rules": "nullable|string|max:200"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_SLOTS",
+            "default_value": "0",
+            "description": "Highest number of players that can be connected at once. 0 means no limit.",
+            "rules": "required|integer|between:0,65535"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|string|max:40"
+        },
+        {
+            "name": "Public Listing",
+            "env_variable": "SERVER_PUBLIC",
+            "default_value": "false",
+            "description": "List the server in Factorio's public server browser. This needs the factorio.com username and token below.",
+            "rules": "required|string|in:true,false"
+        },
+        {
+            "name": "Factorio.com Username",
+            "env_variable": "SERVER_USERNAME",
+            "default_value": "",
+            "description": "factorio.com account name used for the public listing. Not needed for a private server.",
+            "rules": "nullable|string|max:40"
+        },
+        {
+            "name": "Factorio.com Token",
+            "env_variable": "SERVER_TOKEN",
+            "default_value": "",
+            "description": "Token of that account, shown on https://factorio.com/profile. Not needed for a private server.",
+            "rules": "nullable|alpha_num|max:100"
+        },
+        {
+            "name": "Autosave Interval",
+            "env_variable": "SAVE_INTERVAL",
+            "default_value": "10",
+            "description": "Minutes between automatic saves.",
+            "rules": "required|integer|between:1,999"
+        },
+        {
+            "name": "Autosave Slots",
+            "env_variable": "SAVE_SLOTS",
+            "default_value": "5",
+            "description": "Number of automatic saves to keep.",
+            "rules": "required|integer|between:1,999"
+        },
+        {
+            "name": "AFK Kick",
+            "env_variable": "AFK_KICK",
+            "default_value": "0",
+            "description": "Minutes of inactivity after which a player is kicked. 0 never kicks.",
+            "rules": "required|integer|between:0,999"
+        },
+        {
+            "name": "RCON Password",
+            "env_variable": "RCON_PASSWORD",
+            "default_value": "",
+            "description": "Password for remote console tools, which connect to the RCON port over TCP. Leave empty to keep RCON disabled.",
+            "rules": "nullable|alpha_dash|max:64"
+        }
+    ]
+}

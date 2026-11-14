@@ -32,4 +32,9 @@ type EggPort struct {
 	Env      string `json:"env"`
 	Default  int    `json:"default"`
 	Protocol string `json:"protocol"`
+	// Offset ties the port to the primary one: the game derives it itself
+	// (Valheim's query port is always its game port plus one), so it must be
+	// exactly the primary port plus this number. Zero means the port is
+	// independent and can be any free one.
+	Offset int `json:"offset,omitempty"`
 }

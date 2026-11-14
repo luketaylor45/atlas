@@ -1,0 +1,50 @@
+{
+    "uuid": "atlas-mc-neoforge",
+    "name": "NeoForge",
+    "description": "NeoForge mod loader, the community continuation of Forge for Minecraft 1.20.1 and newer.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:java_25",
+        "ghcr.io/ptero-eggs/yolks:java_21",
+        "ghcr.io/ptero-eggs/yolks:java_17",
+        "ghcr.io/ptero-eggs/yolks:java_16",
+        "ghcr.io/ptero-eggs/yolks:java_11",
+        "ghcr.io/ptero-eggs/yolks:java_8"
+    ],
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true @unix_args.txt",
+    "stop_command": "stop",
+    "startup_done": [
+        "Done ("
+    ],
+    "config_files": {
+        "server.properties": {
+            "parser": "properties",
+            "find": {
+                "server-ip": "0.0.0.0",
+                "server-port": "{{server.build.default.port}}",
+                "query.port": "{{server.build.default.port}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/minecraft-java.sh",
+        "_scripts/minecraft-neoforge.sh"
+    ],
+    "script_container": "ghcr.io/ptero-eggs/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Minecraft Version",
+            "env_variable": "MC_VERSION",
+            "default_value": "latest",
+            "description": "Minecraft version to install NeoForge for (for example 1.21.1), or 'latest'. Pick the Java image that version runs on: Java 17 up to 1.20.4, 21 for 1.20.5 to 1.21.11, 25 after that.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "NeoForge Version",
+            "env_variable": "NEOFORGE_VERSION",
+            "default_value": "",
+            "description": "Optional exact NeoForge version, for example 21.1.266. Overrides Minecraft Version.",
+            "rules": "nullable|regex:/^[\\w.+-]+$/|max:40"
+        }
+    ]
+}

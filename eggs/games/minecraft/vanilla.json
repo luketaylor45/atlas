@@ -12,6 +12,19 @@
     ],
     "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}",
     "stop_command": "stop",
+    "startup_done": [
+        "Done ("
+    ],
+    "config_files": {
+        "server.properties": {
+            "parser": "properties",
+            "find": {
+                "server-ip": "0.0.0.0",
+                "server-port": "{{server.build.default.port}}",
+                "query.port": "{{server.build.default.port}}"
+            }
+        }
+    },
     "script_install": "#!/bin/ash\n# Vanilla Minecraft installation script\nset -eu\n\nMANIFEST_URL=\"https://launchermeta.mojang.com/mc/game/version_manifest.json\"\ncd /mnt/server\n\nSERVER_JARFILE=\"${SERVER_JARFILE:-server.jar}\"\nMINECRAFT_VERSION=\"${MINECRAFT_VERSION:-latest}\"\n\ndownload_jar() {\n    url=\"$1\"\n    target=\"$2\"\n    echo \"[Atlas] Downloading ${url}\"\n    rm -f \"${target}.part\"\n    if ! curl -fSL --retry 3 --retry-delay 2 -o \"${target}.part\" \"${url}\"; then\n        echo \"[Atlas] Error: the download failed.\" >&2\n        rm -f \"${target}.part\"\n        exit 1\n    fi\n    if [ \"$(head -c 2 \"${target}.part\")\" != \"PK\" ]; then\n        echo \"[Atlas] Error: the downloaded file is not a valid jar.\" >&2\n        rm -f \"${target}.part\"\n        exit 1\n    fi\n    mv -f \"${target}.part\" \"${target}\"\n}\n\necho \"[Atlas] Looking up Minecraft versions\"\nMANIFEST=$(curl -fsSL --retry 3 \"${MANIFEST_URL}\")\n\nif [ \"${MINECRAFT_VERSION}\" = \"latest\" ]; then\n    VERSION=$(echo \"${MANIFEST}\" | jq -r '.latest.release')\nelse\n    VERSION=\"${MINECRAFT_VERSION}\"\nfi\n\nVERSION_URL=$(echo \"${MANIFEST}\" | jq -r --arg v \"${VERSION}\" '.versions[] | select(.id == $v) | .url')\nif [ -z \"${VERSION_URL}\" ]; then\n    echo \"[Atlas] Error: Minecraft has no version ${VERSION}.\" >&2\n    exit 1\nfi\n\necho \"[Atlas] Installing Minecraft ${VERSION}\"\nDOWNLOAD_URL=$(curl -fsSL --retry 3 \"${VERSION_URL}\" | jq -r '.downloads.server.url')\nif [ -z \"${DOWNLOAD_URL}\" ] || [ \"${DOWNLOAD_URL}\" = \"null\" ]; then\n    echo \"[Atlas] Error: Minecraft ${VERSION} has no server download.\" >&2\n    exit 1\nfi\n\ndownload_jar \"${DOWNLOAD_URL}\" \"${SERVER_JARFILE}\"\n\necho \"eula=true\" > eula.txt\necho \"[Atlas] Finalizing installation\"\n",
     "script_container": "ghcr.io/pterodactyl/installers:alpine",
     "script_entry": "ash",

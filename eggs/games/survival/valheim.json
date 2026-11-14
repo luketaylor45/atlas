@@ -1,0 +1,95 @@
+{
+    "uuid": "atlas-valheim",
+    "name": "Valheim",
+    "description": "Vanilla Valheim dedicated server. The game port is UDP and is 2456 by convention; Valheim always answers server-browser queries on the game port + 1, so give the Query port that number. Worlds are saved in .config/unity3d/IronGate/Valheim. Valheim has no command console: type 'stop' to save the world and shut down.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/games:valheim"
+    ],
+    "startup_command": "export LD_LIBRARY_PATH=\"./linux64:${LD_LIBRARY_PATH}\" SteamAppId=892970; ( while read -r cmd; do case \"${cmd}\" in stop|quit|exit|shutdown) echo \"[Atlas] Saving the world and stopping Valheim...\"; kill -INT \"$(cat /tmp/valheim.pid)\" ;; *) echo \"[Atlas] Valheim has no command console. Type 'stop' to save the world and shut down.\" ;; esac; done ) <&0 & ( echo \"${BASHPID}\" > /tmp/valheim.pid; exec ./valheim_server.x86_64 -nographics -batchmode -name \"${SERVER_NAME}\" -port {{SERVER_PORT}} -world \"${WORLD}\" -password \"${PASSWORD}\" -public $( [[ \"${PUBLIC_SERVER}\" =~ ^(1|true)$ ]] && echo 1 || echo 0 ) -saveinterval {{SAVE_INTERVAL}} -backups {{BACKUP_COUNT}} $( [[ \"${ENABLE_CROSSPLAY}\" =~ ^(1|true)$ ]] && printf %s -crossplay ) ) | sed -uE '/^\\(Filename:.*Line:[[:space:]]+[[:digit:]]+\\)$/d; /^[[:space:]]*$/d'",
+    "stop_command": "stop",
+    "startup_done": [
+        "Game server connected",
+        "DungeonDB Start"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Query (game port + 1)",
+            "env": "QUERY_PORT",
+            "default": 2457,
+            "protocol": "udp",
+            "offset": 1
+        }
+    ],
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Atlas Valheim Server",
+            "description": "Name shown in the server browser.",
+            "rules": "required|string|max:60"
+        },
+        {
+            "name": "World Name",
+            "env_variable": "WORLD",
+            "default_value": "Dedicated",
+            "description": "World to load; it is created when it does not exist yet. Changing it switches to another world and keeps the old one.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "PASSWORD",
+            "default_value": "changeme123",
+            "description": "Password players need to join. Valheim refuses to start with a password shorter than 5 characters or one that is part of the server name. Change the default.",
+            "rules": "required|string|min:5|max:20"
+        },
+        {
+            "name": "Public Server",
+            "env_variable": "PUBLIC_SERVER",
+            "default_value": "1",
+            "description": "List the server in the community server browser. When off it can only be joined by address.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Crossplay",
+            "env_variable": "ENABLE_CROSSPLAY",
+            "default_value": "0",
+            "description": "Let Xbox and Microsoft Store players join. Crossplay servers are joined with a join code printed in the console and relay traffic through PlayFab.",
+            "rules": "boolean"
+        },
+        {
+            "name": "Save Interval",
+            "env_variable": "SAVE_INTERVAL",
+            "default_value": "1800",
+            "description": "Seconds between world saves.",
+            "rules": "required|integer|between:60,86400"
+        },
+        {
+            "name": "Backups",
+            "env_variable": "BACKUP_COUNT",
+            "default_value": "4",
+            "description": "How many automatic world backups are kept.",
+            "rules": "required|integer|between:0,50"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "896660",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

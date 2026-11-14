@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/luketaylor45/atlas/core/internal/database"
+	"github.com/luketaylor45/atlas/core/internal/eggfile"
 	"github.com/luketaylor45/atlas/core/internal/models"
 )
 
@@ -152,6 +153,23 @@ func UpdateEgg(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	if strings.TrimSpace(egg.Name) == "" || strings.TrimSpace(egg.StartupCommand) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "An egg needs a name and a startup command"})
+		return
+	}
+	configFiles, err := eggfile.NormalizeConfigFiles(egg.ConfigFiles)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Config files: " + err.Error()})
+		return
+	}
+	startupDone, err := eggfile.NormalizeStartupDone(egg.StartupDone)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Startup detection: " + err.Error()})
+		return
+	}
+	egg.ConfigFiles = configFiles
+	egg.StartupDone = startupDone
 
 	// The request body cannot move the egg to another record or rewrite the
 	// fields Atlas tracks itself.

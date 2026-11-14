@@ -1,0 +1,138 @@
+{
+    "uuid": "atlas-7dtd",
+    "name": "7 Days to Die",
+    "description": "7 Days to Die dedicated server. The game port is 26900 by convention (TCP and UDP); the game also uses the game port + 1 and + 2 on UDP, so give the two extra ports those numbers. The variables below override serverconfig.xml on the command line; every other setting in that file is yours to edit. The console is the server's telnet console, which is only reachable from inside the container.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:debian"
+    ],
+    "startup_command": "export LD_LIBRARY_PATH=.; mkdir -p logs; rm -f logs/latest.log; ./7DaysToDieServer.x86_64 -configfile=serverconfig.xml -logfile logs/latest.log -quit -batchmode -nographics -dedicated -ServerPort={{SERVER_PORT}} -ServerName=\"${SERVER_NAME}\" -ServerPassword=\"${SERVER_PASSWORD}\" -ServerMaxPlayerCount={{MAX_PLAYERS}} -ServerVisibility={{SERVER_VISIBILITY}} -ServerDisabledNetworkProtocols=\"${SERVER_DISABLED_NETWORK_PROTOCOLS}\" -GameWorld=\"${GAME_WORLD}\" -WorldGenSeed=\"${WORLD_GEN_SEED}\" -WorldGenSize={{WORLD_GEN_SIZE}} -GameName=\"${GAME_NAME}\" -GameDifficulty={{GAME_DIFFICULTY}} -ControlPanelEnabled=false -TelnetEnabled=true -TelnetPort={{TELNET_PORT}} -TelnetPassword= & SDTD_PID=$!; tail -n +1 -F logs/latest.log 2>/dev/null & TAIL_PID=$!; echo \"[Atlas] Starting 7 Days to Die; the console connects when the server is ready.\"; until nc -z -w5 127.0.0.1 {{TELNET_PORT}} 2>/dev/null; do if ! kill -0 \"${SDTD_PID}\" 2>/dev/null; then kill \"${TAIL_PID}\" 2>/dev/null; echo \"[Atlas] 7 Days to Die exited while starting. See logs/latest.log.\"; exit 1; fi; sleep 5; done; kill \"${TAIL_PID}\" 2>/dev/null; while kill -0 \"${SDTD_PID}\" 2>/dev/null; do if nc -z -w2 127.0.0.1 {{TELNET_PORT}} 2>/dev/null; then telnet -E 127.0.0.1 {{TELNET_PORT}}; else sleep 2; fi; done; wait \"${SDTD_PID}\"",
+    "stop_command": "shutdown",
+    "startup_done": [
+        "Connected with 7DTD server"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Steam networking (game port + 1)",
+            "env": "STEAM_PORT",
+            "default": 26901,
+            "protocol": "udp",
+            "offset": 1
+        },
+        {
+            "name": "LiteNetLib (game port + 2)",
+            "env": "LITENET_PORT",
+            "default": 26902,
+            "protocol": "udp",
+            "offset": 2
+        }
+    ],
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Atlas 7 Days to Die Server",
+            "description": "Name shown in the server browser.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "8",
+            "description": "Most players that can be connected at once.",
+            "rules": "required|integer|between:1,64"
+        },
+        {
+            "name": "Visibility",
+            "env_variable": "SERVER_VISIBILITY",
+            "default_value": "2",
+            "description": "2 lists the server publicly, 1 shows it to Steam friends only, 0 hides it.",
+            "rules": "required|in:2,1,0"
+        },
+        {
+            "name": "World",
+            "env_variable": "GAME_WORLD",
+            "default_value": "Navezgane",
+            "description": "World to play: Navezgane, one of the shipped pregenerated worlds (for example 'Pregen06k01'), or RWG to generate a random world from the seed and size below.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Random World Seed",
+            "env_variable": "WORLD_GEN_SEED",
+            "default_value": "Atlas",
+            "description": "Seed of the random world. Only used when World is RWG.",
+            "rules": "required|alpha_num|max:32"
+        },
+        {
+            "name": "Random World Size",
+            "env_variable": "WORLD_GEN_SIZE",
+            "default_value": "6144",
+            "description": "Size of the random world. Only used when World is RWG. Larger worlds take much longer to generate and need more memory.",
+            "rules": "required|in:6144,8192,10240"
+        },
+        {
+            "name": "Save Name",
+            "env_variable": "GAME_NAME",
+            "default_value": "My Game",
+            "description": "Name of the save game. Changing it starts a new save and keeps the old one.",
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "Difficulty",
+            "env_variable": "GAME_DIFFICULTY",
+            "default_value": "1",
+            "description": "0 is the easiest and 5 the hardest.",
+            "rules": "required|in:0,1,2,3,4,5"
+        },
+        {
+            "name": "Disabled Network Protocols",
+            "env_variable": "SERVER_DISABLED_NETWORK_PROTOCOLS",
+            "default_value": "SteamNetworking",
+            "description": "Network protocols the server does not offer, separated by commas: LiteNetLib, SteamNetworking. Servers with their ports reachable from the internet should disable SteamNetworking.",
+            "rules": "nullable|string|max:40"
+        },
+        {
+            "name": "Telnet Port",
+            "env_variable": "TELNET_PORT",
+            "default_value": "8081",
+            "description": "Port of the telnet console. It carries the panel's console inside the container, has no password and is not published.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|integer|between:1024,65535"
+        },
+        {
+            "name": "Beta Branch",
+            "env_variable": "SRCDS_BETAID",
+            "default_value": "",
+            "description": "Steam branch to install instead of the public one, for example 'latest_experimental'. Leave empty for the public branch. Reinstall the server after changing it.",
+            "rules": "nullable|string|max:40"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "294420",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

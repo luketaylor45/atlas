@@ -78,18 +78,13 @@ func monitorEvents(ctx context.Context) error {
 				continue
 			}
 
-			status := ""
-
 			switch msg.Action {
 			case "start":
-				status = "running"
-			case "die", "stop":
-				status = "offline"
-			}
-
-			if status != "" {
 				log.Printf("[Daemon] Event detected for %s: %s -> notifying Core", uuid, msg.Action)
-				NotifyStatus(uuid, status)
+				serverStarted(uuid)
+			case "die", "stop":
+				log.Printf("[Daemon] Event detected for %s: %s -> notifying Core", uuid, msg.Action)
+				serverStopped(uuid)
 			}
 		case err, ok := <-errs:
 			if !ok {

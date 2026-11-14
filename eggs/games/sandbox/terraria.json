@@ -1,0 +1,102 @@
+{
+    "uuid": "atlas-terraria",
+    "name": "Terraria",
+    "description": "Official (vanilla) Terraria dedicated server from terraria.org. The world is created on first start, which can take a few minutes. Allow 1 GB of disk and 1 GB of memory, or 2 GB of memory for a large world.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:debian"
+    ],
+    "startup_command": "export TERM=xterm; ./TerrariaServer.bin.x86_64 -config serverconfig.txt",
+    "stop_command": "exit",
+    "startup_done": [
+        "Type 'help' for a list of commands",
+        "Server started"
+    ],
+    "config_files": {
+        "serverconfig.txt": {
+            "parser": "properties",
+            "find": {
+                "worldpath": "/home/container/saves/Worlds",
+                "worldname": "{{server.build.env.WORLD_NAME}}",
+                "world": "/home/container/saves/Worlds/{{server.build.env.WORLD_NAME}}.wld",
+                "autocreate": "{{server.build.env.WORLD_SIZE}}",
+                "difficulty": "{{server.build.env.WORLD_DIFFICULTY}}",
+                "seed": "{{server.build.env.WORLD_SEED}}",
+                "port": "{{server.build.default.port}}",
+                "maxplayers": "{{server.build.env.MAX_PLAYERS}}",
+                "password": "{{server.build.env.SERVER_PASSWORD}}",
+                "motd": "{{server.build.env.SERVER_MOTD}}",
+                "npcstream": "{{server.build.env.NPCSTREAM}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/terraria.sh"
+    ],
+    "script_container": "ghcr.io/ptero-eggs/installers:debian",
+    "script_entry": "bash",
+    "variables": [
+        {
+            "name": "Terraria Version",
+            "env_variable": "TERRARIA_VERSION",
+            "default_value": "latest",
+            "description": "Version to install: 'latest' or a 1.4+ version such as 1.4.4.9. Reinstall the server to change it.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "World Name",
+            "env_variable": "WORLD_NAME",
+            "default_value": "world",
+            "description": "Name of the world and of its file in saves/Worlds. A world with this name is created if it does not exist yet.",
+            "rules": "required|alpha_dash|max:32"
+        },
+        {
+            "name": "World Size",
+            "env_variable": "WORLD_SIZE",
+            "default_value": "1",
+            "description": "Size of a newly created world: 1 small, 2 medium, 3 large.",
+            "rules": "required|string|in:1,2,3"
+        },
+        {
+            "name": "World Difficulty",
+            "env_variable": "WORLD_DIFFICULTY",
+            "default_value": "0",
+            "description": "Difficulty of a newly created world: 0 classic, 1 expert, 2 master, 3 journey.",
+            "rules": "required|string|in:0,1,2,3"
+        },
+        {
+            "name": "World Seed",
+            "env_variable": "WORLD_SEED",
+            "default_value": "",
+            "description": "Seed for a newly created world. Leave empty for a random one.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "8",
+            "description": "Highest number of players that can be connected at once.",
+            "rules": "required|integer|between:1,255"
+        },
+        {
+            "name": "Server Password",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "description": "Password players need to join. Leave empty for an open server.",
+            "rules": "nullable|string|max:64"
+        },
+        {
+            "name": "Message Of The Day",
+            "env_variable": "SERVER_MOTD",
+            "default_value": "Welcome to the server",
+            "description": "Message shown to players when they join.",
+            "rules": "nullable|string|max:128"
+        },
+        {
+            "name": "NPC Stream",
+            "env_variable": "NPCSTREAM",
+            "default_value": "60",
+            "description": "How often distant enemies are synchronised. Lower values reduce enemy skipping but use more bandwidth; 0 turns it off.",
+            "rules": "required|integer|between:0,60"
+        }
+    ]
+}

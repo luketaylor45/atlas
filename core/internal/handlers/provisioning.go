@@ -101,7 +101,7 @@ func buildServerSpec(service *models.Service) map[string]interface{} {
 		extra = append(extra, map[string]interface{}{"port": port.Port, "protocol": normalizeProtocol(port.Protocol)})
 	}
 
-	return map[string]interface{}{
+	spec := map[string]interface{}{
 		"uuid":              service.UUID,
 		"memory":            service.Memory,
 		"disk":              service.Disk,
@@ -115,6 +115,28 @@ func buildServerSpec(service *models.Service) map[string]interface{} {
 		"install_container": service.Egg.ScriptContainer,
 		"install_entry":     service.Egg.ScriptEntry,
 	}
+	withEggRuntime(spec, &service.Egg)
+	return spec
+}
+
+// withEggRuntime adds what the node needs each time it starts a server: the
+// config files to rewrite, how to tell that startup finished and how to stop
+// it. It is sent with every start, so editing an egg takes effect on the next
+// start without rebuilding anything.
+func withEggRuntime(payload map[string]interface{}, egg *models.Egg) map[string]interface{} {
+	payload["config_files"] = strings.TrimSpace(egg.ConfigFiles)
+	payload["startup_done"] = eggStartupDone(egg)
+	payload["stop_command"] = egg.StopCommand
+	return payload
+}
+
+// eggStartupDone decodes the console strings that mark a finished startup.
+func eggStartupDone(egg *models.Egg) []string {
+	done := []string{}
+	if strings.TrimSpace(egg.StartupDone) != "" {
+		_ = json.Unmarshal([]byte(egg.StartupDone), &done)
+	}
+	return done
 }
 
 // loadServiceForNode loads everything buildServerSpec needs.
@@ -198,6 +220,20 @@ func (e *portTakenError) Error() string {
 
 func (e *portTakenError) Unwrap() error { return errPortTaken }
 
+// derivedPortTakenError is a taken port that follows from the primary one,
+// where the fix is to pick a different primary port.
+type derivedPortTakenError struct {
+	portTakenError
+	Name   string
+	Offset int
+}
+
+func (e *derivedPortTakenError) Error() string {
+	return fmt.Sprintf("Port %d is already in use, and this game needs it for %s (always the game port plus %d). Choose a different game port.", e.Port, e.Name, e.Offset)
+}
+
+func (e *derivedPortTakenError) Unwrap() error { return errPortTaken }
+
 // usedNodePorts returns every port allocated on a node, optionally ignoring
 // one service's own allocations.
 func usedNodePorts(tx *gorm.DB, nodeID uint, excludeServiceID uint) (map[int]bool, error) {
@@ -254,7 +290,21 @@ func planServicePorts(used map[int]bool, primary int, declared []models.EggPort,
 
 	for _, port := range declared {
 		chosen, explicit := requested[port.Env]
-		if explicit && chosen != 0 {
+		if port.Offset != 0 {
+			// The game works this port out from its primary one, so there is
+			// nothing to choose: it is free or the server cannot be created.
+			derived := primary + port.Offset
+			if explicit && chosen != 0 && chosen != derived {
+				return nil, fmt.Errorf("%s is always the game port plus %d, so it must be %d", port.Name, port.Offset, derived)
+			}
+			if err := validateServicePort(derived); err != nil {
+				return nil, fmt.Errorf("%s (the game port plus %d): %w", port.Name, port.Offset, err)
+			}
+			if used[derived] || taken[derived] {
+				return nil, &derivedPortTakenError{portTakenError: portTakenError{Port: derived}, Name: port.Name, Offset: port.Offset}
+			}
+			chosen = derived
+		} else if explicit && chosen != 0 {
 			if err := validateServicePort(chosen); err != nil {
 				return nil, fmt.Errorf("%s: %w", port.Name, err)
 			}

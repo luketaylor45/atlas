@@ -1,0 +1,63 @@
+{
+    "uuid": "atlas-mc-purpur",
+    "name": "Purpur",
+    "description": "Paper fork with extra gameplay features and configuration options.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:java_25",
+        "ghcr.io/ptero-eggs/yolks:java_21",
+        "ghcr.io/ptero-eggs/yolks:java_17",
+        "ghcr.io/ptero-eggs/yolks:java_16",
+        "ghcr.io/ptero-eggs/yolks:java_11",
+        "ghcr.io/ptero-eggs/yolks:java_8"
+    ],
+    "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
+    "stop_command": "stop",
+    "startup_done": [
+        "Done ("
+    ],
+    "config_files": {
+        "server.properties": {
+            "parser": "properties",
+            "find": {
+                "server-ip": "0.0.0.0",
+                "server-port": "{{server.build.default.port}}",
+                "query.port": "{{server.build.default.port}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/minecraft-purpur.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:alpine",
+    "script_entry": "ash",
+    "variables": [
+        {
+            "name": "Minecraft Version",
+            "env_variable": "MINECRAFT_VERSION",
+            "default_value": "latest",
+            "description": "Minecraft version to install (for example 1.21.11), or 'latest'. Current versions need Java 25; pick an older Java image for older versions.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Build Number",
+            "env_variable": "BUILD_NUMBER",
+            "default_value": "latest",
+            "description": "Purpur build number, or 'latest'.",
+            "rules": "required|string|max:20"
+        },
+        {
+            "name": "Server Jar File",
+            "env_variable": "SERVER_JARFILE",
+            "default_value": "server.jar",
+            "description": "Name of the server jar the startup command runs.",
+            "rules": "required|regex:/^([\\w\\d._-]+)(\\.jar)$/"
+        },
+        {
+            "name": "Download URL",
+            "env_variable": "DL_PATH",
+            "default_value": "",
+            "description": "Optional direct link to a server jar. When set, it is downloaded instead of looking up a version.",
+            "rules": "nullable|string"
+        }
+    ]
+}

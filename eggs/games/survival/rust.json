@@ -1,0 +1,147 @@
+{
+    "uuid": "atlas-rust",
+    "name": "Rust",
+    "description": "Rust dedicated server, vanilla or with the Oxide or Carbon mod framework. The game port is UDP and is 28015 by convention. The console and a clean shutdown go through RCON, so the server will not start until an RCON password is set. A new map is generated on the first start, which takes several minutes.",
+    "docker_images": [
+        "ghcr.io/pelican-eggs/games:rust"
+    ],
+    "startup_command": "stop_wrapper() { sleep 3; for p in /proc/[0-9]*/cmdline; do if grep -qa /wrapper/wrapper.js \"${p}\" 2>/dev/null; then p=\"${p#/proc/}\"; kill \"${p%/cmdline}\" 2>/dev/null; fi; done; }; if [ -z \"${RCON_PASS}\" ]; then echo \"[Atlas] Set the RCON Password variable, then start the server again. The console and a clean shutdown depend on it.\"; stop_wrapper; exit 1; fi; ./RustDedicated -batchmode +server.port {{SERVER_PORT}} +server.queryport {{QUERY_PORT}} +rcon.port {{RCON_PORT}} +rcon.web true +rcon.password \"${RCON_PASS}\" +app.port {{APP_PORT}} +server.identity \"rust\" +server.hostname \"${SERVER_HOSTNAME}\" +server.description \"${DESCRIPTION}\" +server.url \"${SERVER_URL}\" +server.headerimage \"${SERVER_IMG}\" +server.level \"${LEVEL}\" +server.worldsize {{WORLD_SIZE}} $( [ -n \"${WORLD_SEED}\" ] && printf '+server.seed %s' \"${WORLD_SEED}\" ) $( [ -n \"${MAP_URL}\" ] && printf '+server.levelurl %s' \"${MAP_URL}\" ) +server.maxplayers {{MAX_PLAYERS}} +server.saveinterval {{SAVEINTERVAL}} ${ADDITIONAL_ARGS}; RUST_EXIT=$?; stop_wrapper; ( exit \"${RUST_EXIT}\" )",
+    "stop_command": "quit",
+    "startup_done": [
+        "Server startup complete"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Query",
+            "env": "QUERY_PORT",
+            "default": 28017,
+            "protocol": "udp"
+        },
+        {
+            "name": "RCON",
+            "env": "RCON_PORT",
+            "default": 28016,
+            "protocol": "tcp"
+        },
+        {
+            "name": "Rust+ App",
+            "env": "APP_PORT",
+            "default": 28082,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_HOSTNAME",
+            "default_value": "Atlas Rust Server",
+            "description": "Name shown in the server list.",
+            "rules": "required|string|max:60"
+        },
+        {
+            "name": "Description",
+            "env_variable": "DESCRIPTION",
+            "default_value": "Powered by Atlas",
+            "description": "Text under the server name in the server list. Use \\n for a new line.",
+            "rules": "nullable|string|max:500"
+        },
+        {
+            "name": "Website",
+            "env_variable": "SERVER_URL",
+            "default_value": "",
+            "description": "Address opened by the 'Visit Website' button.",
+            "rules": "nullable|url"
+        },
+        {
+            "name": "Header Image",
+            "env_variable": "SERVER_IMG",
+            "default_value": "",
+            "description": "Address of the image shown at the top of the server listing (512x256).",
+            "rules": "nullable|url"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "50",
+            "description": "Most players that can be connected at once.",
+            "rules": "required|integer|between:1,500"
+        },
+        {
+            "name": "Level",
+            "env_variable": "LEVEL",
+            "default_value": "Procedural Map",
+            "description": "Map type: Procedural Map, Barren, HapisIsland, SavasIsland or SavasIsland_koth.",
+            "rules": "required|string|max:30"
+        },
+        {
+            "name": "World Size",
+            "env_variable": "WORLD_SIZE",
+            "default_value": "3500",
+            "description": "Size of a procedural map (1000-6000). Larger maps need more memory.",
+            "rules": "required|integer|between:1000,6000"
+        },
+        {
+            "name": "World Seed",
+            "env_variable": "WORLD_SEED",
+            "default_value": "",
+            "description": "Seed of a procedural map. Leave empty to let the server use its default.",
+            "rules": "nullable|integer"
+        },
+        {
+            "name": "Custom Map URL",
+            "env_variable": "MAP_URL",
+            "default_value": "",
+            "description": "Direct download address of a custom map. It replaces the level, size and seed above.",
+            "rules": "nullable|url"
+        },
+        {
+            "name": "Save Interval",
+            "env_variable": "SAVEINTERVAL",
+            "default_value": "300",
+            "description": "Seconds between automatic saves.",
+            "rules": "required|integer|between:30,3600"
+        },
+        {
+            "name": "RCON Password",
+            "env_variable": "RCON_PASS",
+            "default_value": "",
+            "description": "Password for RCON, which the console and the stop button also use. Required: the server will not start without one. Letters, digits, dots, dashes and underscores only.",
+            "rules": "required|regex:/^[\\w.-]+$/|max:64"
+        },
+        {
+            "name": "Mod Framework",
+            "env_variable": "FRAMEWORK",
+            "default_value": "vanilla",
+            "description": "vanilla runs the unmodified server. oxide and carbon download the latest release of that framework on every start.",
+            "rules": "required|in:vanilla,oxide,carbon"
+        },
+        {
+            "name": "Additional Arguments",
+            "env_variable": "ADDITIONAL_ARGS",
+            "default_value": "",
+            "description": "Extra startup parameters, for example '+server.tags weekly,vanilla'.",
+            "rules": "nullable|string|max:500"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "258550",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

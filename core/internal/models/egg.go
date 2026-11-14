@@ -35,11 +35,16 @@ type Egg struct {
 	Name        string `gorm:"size:255;not null" json:"name"`
 	Description string `gorm:"type:text" json:"description"`
 
-	DockerImage     string `gorm:"type:text;not null" json:"docker_image"`
-	DockerImages    string `gorm:"type:text" json:"docker_images"` // JSON List of available images
-	StartupCommand  string `gorm:"type:text;not null" json:"startup_command"`
-	StopCommand     string `gorm:"size:255" json:"stop_command"`
-	Config          string `gorm:"type:text" json:"config"` // JSON string for config file replacements
+	DockerImage    string `gorm:"type:text;not null" json:"docker_image"`
+	DockerImages   string `gorm:"type:text" json:"docker_images"` // JSON List of available images
+	StartupCommand string `gorm:"type:text;not null" json:"startup_command"`
+	StopCommand    string `gorm:"size:255" json:"stop_command"`
+	// ConfigFiles is a JSON object of files rewritten before every start, in
+	// the same shape as Pterodactyl's config.files.
+	ConfigFiles string `gorm:"column:config;type:text" json:"config_files"`
+	// StartupDone is a JSON list of console strings that mean the server has
+	// finished starting. Empty means it counts as running once its process starts.
+	StartupDone     string `gorm:"type:text" json:"startup_done"`
 	ScriptInstall   string `gorm:"type:text" json:"script_install"`
 	ScriptEntry     string `gorm:"size:255" json:"script_entry"`
 	ScriptContainer string `gorm:"size:255" json:"script_container"`

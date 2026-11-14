@@ -4,6 +4,7 @@ import api from '../../../lib/api';
 import { errorMessage } from '../../../lib/errors';
 import { eggImages, eggPorts, type Egg } from '../../../lib/types';
 import { Alert, Badge, Button, Field, IconButton, Input, Modal, Select, Table, Td, Textarea, Th, Tr } from '../../../components/ui';
+import { configFilesProblem, configFilesText, startupDoneLines, startupDoneValue } from './EggForm';
 import { portNumber } from './ServiceForm';
 
 export interface EggEditorModalProps {
@@ -18,11 +19,22 @@ interface PortRow {
     env: string;
     defaultPort: string;
     protocol: string;
+    /** Kept as it is: the game derives this port from its primary one. */
+    offset?: number;
 }
 
-type FieldName = 'name' | 'startup' | 'images' | 'ports';
+type FieldName = 'name' | 'startup' | 'images' | 'config' | 'ports';
 
 const mono = 'font-mono text-xs leading-relaxed';
+
+const configExample = `{
+  "server.properties": {
+    "parser": "properties",
+    "find": {
+      "server-port": "{{server.build.default.port}}"
+    }
+  }
+}`;
 
 function normalizeProtocol(protocol: string | undefined): string {
     const value = (protocol ?? '').trim().toLowerCase();
@@ -40,8 +52,10 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
     const [name, setName] = useState(egg.name ?? '');
     const [description, setDescription] = useState(egg.description ?? '');
     const [startup, setStartup] = useState(egg.startup_command ?? '');
+    const [startupDone, setStartupDone] = useState(() => startupDoneLines(egg));
     const [stop, setStop] = useState(egg.stop_command ?? '');
     const [images, setImages] = useState(() => eggImages(egg).join('\n'));
+    const [configFiles, setConfigFiles] = useState(() => configFilesText(egg));
     const [scriptContainer, setScriptContainer] = useState(egg.script_container ?? '');
     const [scriptEntry, setScriptEntry] = useState(egg.script_entry ?? '');
     const [scriptInstall, setScriptInstall] = useState(egg.script_install ?? '');
@@ -52,6 +66,7 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
             env: port.env,
             defaultPort: port.default ? String(port.default) : '',
             protocol: normalizeProtocol(port.protocol),
+            offset: port.offset || undefined,
         })),
     );
 
@@ -86,8 +101,15 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
         if (!startup.trim()) next.startup = 'Enter the command that starts the game.';
         if (imageList.length === 0) next.images = 'List at least one Docker image.';
 
+        // Startup detection and config files are sent only when they were
+        // edited, so saving the egg never rewrites what was stored for them.
+        const startupDoneEdited = startupDone !== startupDoneLines(egg);
+        const configFilesEdited = configFiles !== configFilesText(egg);
+        const configProblem = configFilesEdited ? configFilesProblem(configFiles) : null;
+        if (configProblem) next.config = configProblem;
+
         const seen = new Set<string>();
-        const portList: { name: string; env: string; default: number; protocol: string }[] = [];
+        const portList: { name: string; env: string; default: number; protocol: string; offset?: number }[] = [];
         for (const row of ports) {
             const env = row.env.trim();
             const label = row.name.trim() || env || 'A port';
@@ -104,7 +126,13 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
                 next.ports = `${label}: the default must be a port between 1 and 65535, or empty.`;
             } else {
                 seen.add(env);
-                portList.push({ name: row.name.trim() || env, env, default: defaultPort, protocol: normalizeProtocol(row.protocol) });
+                portList.push({
+                    name: row.name.trim() || env,
+                    env,
+                    default: defaultPort,
+                    protocol: normalizeProtocol(row.protocol),
+                    ...(row.offset ? { offset: row.offset } : {}),
+                });
                 continue;
             }
             break;
@@ -128,6 +156,8 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
             script_install: scriptInstall,
             ports: portList.length > 0 ? JSON.stringify(portList) : '',
         };
+        if (startupDoneEdited) payload.startup_done = startupDoneValue(startupDone);
+        if (configFilesEdited) payload.config_files = configFiles.trim();
         delete payload.nest;
         delete payload.variables;
         delete payload.servers;
@@ -167,7 +197,7 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
         >
             <form id={formId} onSubmit={submit} className="space-y-8" noValidate>
                 {formError && <Alert tone="danger">{formError}</Alert>}
-                {(errors.name || errors.startup || errors.images || errors.ports) && (
+                {(errors.name || errors.startup || errors.images || errors.config || errors.ports) && (
                     <Alert tone="danger">Some fields need attention before the egg can be saved.</Alert>
                 )}
 
@@ -207,6 +237,30 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
                         )}
                     </Field>
                     <Field
+                        label="Startup detection"
+                        aside="Optional"
+                        hint={
+                            <>
+                                Console text that means the server has finished starting, one per line, for example{' '}
+                                <code className="font-mono">Done (</code>. The server shows as Starting until one of them appears.
+                                Begin a line with <code className="font-mono">regex:</code> to match a regular expression instead. Leave
+                                this empty and the server shows as running as soon as its process starts.
+                            </>
+                        }
+                    >
+                        {(field) => (
+                            <Textarea
+                                {...field}
+                                rows={3}
+                                spellCheck={false}
+                                wrap="off"
+                                className={mono}
+                                value={startupDone}
+                                onChange={(event) => setStartupDone(event.target.value)}
+                            />
+                        )}
+                    </Field>
+                    <Field
                         label="Stop command"
                         hint={
                             <>
@@ -240,6 +294,30 @@ export function EggEditorModal({ egg, onClose, onSaved }: EggEditorModalProps) {
                                 className={mono}
                                 value={images}
                                 onChange={(event) => setImages(event.target.value)}
+                            />
+                        )}
+                    </Field>
+                    <Field
+                        label="Config files"
+                        aside="Optional"
+                        error={errors.config}
+                        hint={
+                            <>
+                                Files rewritten before every start. Same format as Pterodactyl&apos;s{' '}
+                                <code className="font-mono">config.files</code>.
+                            </>
+                        }
+                    >
+                        {(field) => (
+                            <Textarea
+                                {...field}
+                                rows={10}
+                                spellCheck={false}
+                                wrap="off"
+                                placeholder={configExample}
+                                className={`${mono} min-h-48`}
+                                value={configFiles}
+                                onChange={(event) => setConfigFiles(event.target.value)}
                             />
                         )}
                     </Field>

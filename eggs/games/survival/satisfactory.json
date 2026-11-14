@@ -1,0 +1,65 @@
+{
+    "uuid": "atlas-satisfactory",
+    "name": "Satisfactory",
+    "description": "Satisfactory dedicated server. The game port is 7777 by convention and is used on both UDP (game) and TCP (server API); the Reliable Messaging port is TCP and is 8888 by convention. The server name and admin password are not set here: the first player to connect claims the server in the game's Server Manager.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/steamcmd:debian"
+    ],
+    "startup_command": "./Engine/Binaries/Linux/*-Linux-Shipping FactoryGame -log -unattended -Port={{SERVER_PORT}} -ReliablePort={{RELIABLE_PORT}} -ExternalReliablePort={{RELIABLE_PORT}} \"-ini:Game:[/Script/Engine.GameSession]:MaxPlayers={{MAX_PLAYERS}}\" \"-ini:Engine:[/Script/FactoryGame.FGSaveSession]:mNumRotatingAutosaves={{NUM_AUTOSAVES}}\"",
+    "stop_command": "^C",
+    "startup_done": [
+        "Engine Initialization"
+    ],
+    "script_install_files": [
+        "_scripts/steamcmd.sh"
+    ],
+    "script_container": "ghcr.io/pterodactyl/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "Reliable Messaging",
+            "env": "RELIABLE_PORT",
+            "default": 8888,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "4",
+            "description": "Most players that can be connected at once. The game is designed for 4; more works but is not officially supported.",
+            "rules": "required|integer|between:1,64"
+        },
+        {
+            "name": "Rotating Autosaves",
+            "env_variable": "NUM_AUTOSAVES",
+            "default_value": "5",
+            "description": "How many autosaves are kept before the oldest is overwritten.",
+            "rules": "required|integer|between:1,50"
+        },
+        {
+            "name": "Branch",
+            "env_variable": "SRCDS_BETAID",
+            "default_value": "",
+            "description": "Leave empty for the stable release or choose experimental. Reinstall the server after changing it.",
+            "rules": "nullable|in:experimental"
+        },
+        {
+            "name": "Steam App ID",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "1690800",
+            "description": "Steam app id of the dedicated server. The installer and the update check on start both use it.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|numeric"
+        },
+        {
+            "name": "Automatic Updates",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "description": "Check Steam for a game update every time the server starts.",
+            "rules": "boolean"
+        }
+    ]
+}

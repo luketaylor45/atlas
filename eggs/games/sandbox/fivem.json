@@ -1,0 +1,100 @@
+{
+    "uuid": "atlas-fivem",
+    "name": "FiveM",
+    "description": "FXServer for FiveM (GTA V multiplayer) with the default cfx-server-data resources. A free license key from https://portal.cfx.re is required. Allow 10 GB of disk and at least 4 GB of memory; servers with many resources need more.",
+    "docker_images": [
+        "ghcr.io/ptero-eggs/yolks:debian"
+    ],
+    "startup_command": "export TXHOST_FXS_PORT={{SERVER_PORT}} TXHOST_MAX_SLOTS={{MAX_PLAYERS}} TXHOST_DEFAULT_CFXKEY=\"${FIVEM_LICENSE}\"; FX=/home/container/alpine; \"$FX/opt/cfx-server/ld-musl-x86_64.so.1\" --library-path \"$FX/usr/lib/v8/:$FX/lib/:$FX/usr/lib/\" -- \"$FX/opt/cfx-server/FXServer\" +set citizen_dir \"$FX/opt/cfx-server/citizen/\" +set sv_licenseKey \"${FIVEM_LICENSE}\" +set steam_webApiKey \"${STEAM_WEBAPIKEY}\" $( [ \"${TXADMIN_ENABLE}\" = \"1\" ] || [ \"${TXADMIN_ENABLE}\" = \"true\" ] || printf %s '+exec server.cfg' )",
+    "stop_command": "quit",
+    "startup_done": [
+        "succeeded. Welcome!",
+        "All ready! Please access:"
+    ],
+    "config_files": {
+        "server.cfg": {
+            "parser": "file",
+            "find": {
+                "endpoint_add_tcp": "endpoint_add_tcp \"0.0.0.0:{{server.build.default.port}}\"",
+                "endpoint_add_udp": "endpoint_add_udp \"0.0.0.0:{{server.build.default.port}}\"",
+                "sv_hostname": "sv_hostname \"{{server.build.env.SERVER_HOSTNAME}}\"",
+                "sv_maxclients": "sv_maxclients {{server.build.env.MAX_PLAYERS}}"
+            }
+        }
+    },
+    "script_install_files": [
+        "_scripts/fivem.sh"
+    ],
+    "script_container": "ghcr.io/ptero-eggs/installers:debian",
+    "script_entry": "bash",
+    "ports": [
+        {
+            "name": "txAdmin",
+            "env": "TXHOST_TXA_PORT",
+            "default": 40120,
+            "protocol": "tcp"
+        }
+    ],
+    "variables": [
+        {
+            "name": "License Key",
+            "env_variable": "FIVEM_LICENSE",
+            "default_value": "",
+            "description": "Cfx.re server key (cfxk_...) from https://portal.cfx.re. The server does not start without one.",
+            "rules": "required|alpha_dash|max:64"
+        },
+        {
+            "name": "Server Name",
+            "env_variable": "SERVER_HOSTNAME",
+            "default_value": "My FXServer",
+            "description": "Name shown in the server list. Written to sv_hostname in server.cfg. Double quotes are not allowed.",
+            "rules": "required|string|max:120|regex:/^[^\"]+$/"
+        },
+        {
+            "name": "Max Players",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "48",
+            "description": "Highest number of players that can be connected at once. Written to sv_maxclients in server.cfg. More than 48 slots needs a Cfx.re subscription for the license key.",
+            "rules": "required|integer|between:1,2048"
+        },
+        {
+            "name": "FXServer Version",
+            "env_variable": "FIVEM_VERSION",
+            "default_value": "recommended",
+            "description": "Artifact to install: 'recommended', 'latest' or a full artifact id such as 7290-a654bcc2adfa27c4e020fc915a1a6343c3b4f921. Reinstall the server to change it.",
+            "rules": "required|string|max:60"
+        },
+        {
+            "name": "Steam Web API Key",
+            "env_variable": "STEAM_WEBAPIKEY",
+            "default_value": "none",
+            "description": "Key from https://steamcommunity.com/dev/apikey, needed only if resources identify players by their Steam account. Use 'none' otherwise.",
+            "rules": "required|alpha_num|max:64"
+        },
+        {
+            "name": "txAdmin",
+            "env_variable": "TXADMIN_ENABLE",
+            "default_value": "0",
+            "description": "Run the server under txAdmin, the web panel that ships with FXServer. txAdmin is reached on the txAdmin port, prints a PIN in the console on first start, and manages its own server.cfg under txData, so the Server Name above no longer applies.",
+            "rules": "boolean"
+        },
+        {
+            "name": "txAdmin Data Path",
+            "env_variable": "TXHOST_DATA_PATH",
+            "default_value": "/home/container/txData",
+            "description": "Where txAdmin keeps its settings and the servers it deploys.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|max:200"
+        },
+        {
+            "name": "txAdmin Game",
+            "env_variable": "TXHOST_GAME_NAME",
+            "default_value": "fivem",
+            "description": "Limits txAdmin to FiveM recipes.",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:fivem"
+        }
+    ]
+}

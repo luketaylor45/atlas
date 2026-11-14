@@ -108,11 +108,15 @@ export interface SwitchProps {
     description?: ReactNode;
     disabled?: boolean;
     className?: string;
+    /** From a surrounding `Field`, so its label and help text belong to the switch as well. */
+    id?: string;
+    'aria-describedby'?: string;
 }
 
 /** An on/off setting with its label. The whole row is the click target. */
-export function Switch({ checked, onChange, label, description, disabled, className }: SwitchProps) {
-    const id = useId();
+export function Switch({ checked, onChange, label, description, disabled, className, id: fieldId, 'aria-describedby': describedBy }: SwitchProps) {
+    const ownId = useId();
+    const id = fieldId ?? ownId;
     return (
         <label
             htmlFor={id}
@@ -131,6 +135,7 @@ export function Switch({ checked, onChange, label, description, disabled, classN
                     id={id}
                     type="checkbox"
                     role="switch"
+                    aria-describedby={describedBy}
                     className="peer sr-only"
                     checked={checked}
                     disabled={disabled}

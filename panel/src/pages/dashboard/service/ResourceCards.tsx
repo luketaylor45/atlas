@@ -12,9 +12,10 @@ function finite(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** Live CPU, memory and network use. Polled only while the server is running. */
+/** Live CPU, memory and network use. Polled only while the server is starting or running. */
 export function ResourceCards({ service }: { service: Service }) {
-    const running = service.status === 'running';
+    // The game's process is up from the moment it starts, well before it shows as running.
+    const up = service.status === 'running' || service.status === 'starting';
     const [stats, setStats] = useState<ServiceStats | null>(null);
 
     usePolling(
@@ -28,10 +29,10 @@ export function ResourceCards({ service }: { service: Service }) {
             }
         },
         3000,
-        running,
+        up,
     );
 
-    const current = running ? stats : null;
+    const current = up ? stats : null;
     const cpu = finite(current?.cpu);
     const memory = finite(current?.memory);
     const rx = finite(current?.network?.rx);
@@ -81,7 +82,7 @@ export function ResourceCards({ service }: { service: Service }) {
                         </span>
                     </span>
                 }
-                detail={running ? 'In and out since the server started' : 'Shown while the server is running'}
+                detail={up ? 'In and out since the server started' : 'Shown while the server is running'}
             />
         </div>
     );

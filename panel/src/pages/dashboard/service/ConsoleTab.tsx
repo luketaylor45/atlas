@@ -42,7 +42,8 @@ export function ConsoleTab({ service, access, ref }: { service: Service; access:
     const [historyIndex, setHistoryIndex] = useState<number | null>(null);
 
     const live = isLiveStatus(service.status);
-    const running = service.status === 'running';
+    // A server can stay "starting" for minutes while the game loads, and it reads its console the whole time.
+    const up = service.status === 'running' || service.status === 'starting';
 
     useImperativeHandle(
         ref,
@@ -141,7 +142,7 @@ export function ConsoleTab({ service, access, ref }: { service: Service; access:
 
     const blocked = !access.canCommands
         ? 'You do not have permission to send commands to this server.'
-        : !running
+        : !up
           ? 'Commands can be sent once the server is running.'
           : null;
 

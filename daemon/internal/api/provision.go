@@ -55,6 +55,22 @@ type ServerSpec struct {
 	InstallScript    string        `json:"install_script"`
 	InstallContainer string        `json:"install_container"`
 	InstallEntry     string        `json:"install_entry"`
+
+	// What is needed again at every start; see serverRuntime.
+	ConfigFiles string   `json:"config_files"`
+	StartupDone []string `json:"startup_done"`
+	StopCommand string   `json:"stop_command"`
+}
+
+func (s ServerSpec) runtime() serverRuntime {
+	return serverRuntime{
+		ConfigFiles: s.ConfigFiles,
+		StartupDone: s.StartupDone,
+		StopCommand: s.StopCommand,
+		Port:        s.Port,
+		Memory:      s.Memory,
+		Environment: s.Environment,
+	}
 }
 
 // CreateServerRequest is kept as the name of the create payload.
@@ -330,6 +346,7 @@ func runProvision(ctx context.Context, spec ServerSpec, wipe bool, transcript *i
 
 	// Eggs without an install script run straight from their image.
 	NotifyStatus(spec.UUID, "starting")
+	applyConfigFiles(ctx, spec.UUID, spec.runtime())
 	if err := docker.Client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("start game server container: %w", err)
 	}
@@ -381,6 +398,7 @@ func createGameContainer(ctx context.Context, spec ServerSpec) (string, error) {
 	if err := writeStartScript(spec.UUID, spec.StartupCommand, spec.Port, spec.Memory, spec.Environment); err != nil {
 		return "", err
 	}
+	saveRuntime(spec.UUID, spec.runtime())
 
 	bindings, err := spec.portBindings()
 	if err != nil {
@@ -401,6 +419,7 @@ func createGameContainer(ctx context.Context, spec ServerSpec) (string, error) {
 		"STARTUP=bash "+startScriptName,
 		fmt.Sprintf("SERVER_MEMORY=%d", spec.Memory),
 		fmt.Sprintf("SERVER_PORT=%d", spec.Port),
+		"SERVER_IP="+serverBindAddress,
 		"SERVER_UUID="+spec.UUID,
 	)
 
@@ -483,6 +502,7 @@ func HandleRebuild(c *gin.Context) {
 
 	if wasRunning {
 		NotifyStatus(spec.UUID, "starting")
+		applyConfigFiles(ctx, spec.UUID, spec.runtime())
 		if err := docker.Client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 			reconcileStatusAfterPowerFailure(ctx, spec.UUID)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": powerActionErrorMessage("start", spec.Port, err)})
@@ -578,6 +598,9 @@ func HandleListServers(c *gin.Context) {
 			}
 			if item.State == "running" || item.State == "restarting" {
 				servers[name] = "running"
+				if readiness.isStarting(name) {
+					servers[name] = "starting"
+				}
 			} else {
 				servers[name] = "stopped"
 			}

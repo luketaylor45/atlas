@@ -7,6 +7,7 @@ require (
 	github.com/docker/go-connections v0.6.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/spf13/viper v1.21.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
