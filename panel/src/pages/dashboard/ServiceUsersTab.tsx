@@ -29,6 +29,12 @@ const permissionList: { key: PermissionKey; label: string; description: string }
     { key: 'can_manage_files', label: 'Manage files', description: 'Browse, edit, upload and delete files in the panel.' },
     { key: 'can_edit_startup', label: 'Edit startup', description: 'Change the startup variables.' },
     { key: 'can_access_sftp', label: 'SFTP access', description: 'Connect to the server files with an SFTP client.' },
+    { key: 'can_manage_backups', label: 'Manage backups', description: 'Create, download, restore and delete backups.' },
+    {
+        key: 'can_manage_schedules',
+        label: 'Manage schedules',
+        description: 'Create, change and run schedules. They can only schedule actions they are allowed to do themselves.',
+    },
 ];
 
 const defaultPermissions: ServicePermissions = {
@@ -38,6 +44,8 @@ const defaultPermissions: ServicePermissions = {
     can_edit_startup: false,
     can_control_power: false,
     can_access_sftp: false,
+    can_manage_backups: false,
+    can_manage_schedules: false,
 };
 
 function pickPermissions(user: ServicePermissions): ServicePermissions {
@@ -48,6 +56,8 @@ function pickPermissions(user: ServicePermissions): ServicePermissions {
         can_edit_startup: Boolean(user.can_edit_startup),
         can_control_power: Boolean(user.can_control_power),
         can_access_sftp: Boolean(user.can_access_sftp),
+        can_manage_backups: Boolean(user.can_manage_backups),
+        can_manage_schedules: Boolean(user.can_manage_schedules),
     };
 }
 

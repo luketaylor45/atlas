@@ -16,6 +16,8 @@ services:
       # Leave JWT_SECRET empty to let Atlas generate and store a signing secret.
       - JWT_SECRET=${JWT_SECRET:-}
       - REGISTRATION_ENABLED=${REGISTRATION_ENABLED:-false}
+      # The time zone schedules run in, for example Europe/London.
+      - TZ=${ATLAS_TIMEZONE:-UTC}
       - DATABASE_URL=host=database user=${DB_USER:-atlas} password=${DB_PASS:-atlas_password} dbname=${DB_NAME:-atlas} port=5432 sslmode=disable
     depends_on:
       - database

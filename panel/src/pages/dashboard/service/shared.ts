@@ -10,6 +10,8 @@ export interface ServiceAccess {
     canFiles: boolean;
     canStartup: boolean;
     canPower: boolean;
+    canBackups: boolean;
+    canSchedules: boolean;
 }
 
 export function serviceAccess(details: ServiceDetails): ServiceAccess {
@@ -22,6 +24,8 @@ export function serviceAccess(details: ServiceDetails): ServiceAccess {
         canFiles: owner || Boolean(permissions?.can_manage_files),
         canStartup: owner || Boolean(permissions?.can_edit_startup),
         canPower: owner || Boolean(permissions?.can_control_power),
+        canBackups: owner || Boolean(permissions?.can_manage_backups),
+        canSchedules: owner || Boolean(permissions?.can_manage_schedules),
     };
 }
 

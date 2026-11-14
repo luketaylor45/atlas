@@ -85,6 +85,55 @@ func GenerateConsoleTicket(userID uint, serviceUUID string) (string, error) {
 	return token.SignedString([]byte(config.AppConfig.JWTSecret))
 }
 
+const (
+	downloadAudience = "atlas-download"
+	// Long enough for the browser to follow the link, short enough that a
+	// link copied out of the address bar is useless.
+	downloadTicketLifetime = 60 * time.Second
+)
+
+// DownloadClaims authorise one download of one backup.
+type DownloadClaims struct {
+	UserID      uint   `json:"user_id"`
+	ServiceUUID string `json:"service_uuid"`
+	BackupUUID  string `json:"backup_uuid"`
+	jwt.RegisteredClaims
+}
+
+// GenerateDownloadTicket issues a short-lived ticket for downloading a
+// backup. A browser download cannot send the session header, so the ticket
+// travels in the URL and is tied to one backup of one service.
+func GenerateDownloadTicket(userID uint, serviceUUID string, backupUUID string) (string, error) {
+	claims := &DownloadClaims{
+		UserID:      userID,
+		ServiceUUID: serviceUUID,
+		BackupUUID:  backupUUID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(downloadTicketLifetime)),
+			Issuer:    "atlas-core",
+			Audience:  jwt.ClaimStrings{downloadAudience},
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(config.AppConfig.JWTSecret))
+}
+
+func ValidateDownloadTicket(ticket string, serviceUUID string, backupUUID string) (*DownloadClaims, error) {
+	claims := &DownloadClaims{}
+	token, err := jwt.ParseWithClaims(ticket, claims, signingKey,
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithAudience(downloadAudience),
+		jwt.WithExpirationRequired(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !token.Valid || claims.ServiceUUID == "" || claims.ServiceUUID != serviceUUID || claims.BackupUUID == "" || claims.BackupUUID != backupUUID {
+		return nil, errors.New("invalid download ticket")
+	}
+	return claims, nil
+}
+
 func ValidateConsoleTicket(ticket string, serviceUUID string) (*ConsoleClaims, error) {
 	claims := &ConsoleClaims{}
 	token, err := jwt.ParseWithClaims(ticket, claims, signingKey,

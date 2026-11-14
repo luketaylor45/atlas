@@ -12,7 +12,10 @@ export interface ServiceEditModalProps {
     onSaved: (service: Service, warning?: string) => void;
 }
 
-type FieldName = 'name' | 'memory' | 'cpu' | 'disk' | 'port';
+type FieldName = 'name' | 'memory' | 'cpu' | 'disk' | 'port' | 'backups';
+
+/** The most backups a server may be allowed to keep. */
+const MAX_BACKUP_LIMIT = 50;
 
 interface UpdateResponse {
     service: Service;
@@ -20,8 +23,9 @@ interface UpdateResponse {
 }
 
 /**
- * Edits a server's name, limits, primary port and image. Render it only while
- * it should be open, keyed by the server, so the form starts from its values.
+ * Edits a server's name, limits, primary port, image and how many backups it
+ * may keep. Render it only while it should be open, keyed by the server, so
+ * the form starts from its values.
  */
 export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModalProps) {
     const formId = useId();
@@ -31,6 +35,7 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
     const [disk, setDisk] = useState(String(service.disk));
     const [port, setPort] = useState(String(service.port));
     const [image, setImage] = useState(service.docker_image);
+    const [backups, setBackups] = useState(String(service.backup_limit));
     const [errors, setErrors] = useState<Partial<Record<FieldName, string>>>({});
     const [formError, setFormError] = useState('');
     const [saving, setSaving] = useState(false);
@@ -52,12 +57,16 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
         const cpuValue = wholeNumber(cpu);
         const diskValue = wholeNumber(disk);
         const portValue = portNumber(port);
+        const backupsValue = wholeNumber(backups);
 
         if (!trimmedName) next.name = 'Enter a name for the server.';
         if (memoryValue === null || memoryValue < 1) next.memory = 'Enter the memory limit in MB, as a whole number above zero.';
         if (cpuValue === null || cpuValue < 1) next.cpu = 'Enter the CPU limit as a percentage above zero.';
         if (diskValue === null) next.disk = 'Enter the disk limit in MB, as a whole number.';
         if (portValue === null) next.port = 'Enter a port between 1 and 65535.';
+        if (backupsValue === null || backupsValue > MAX_BACKUP_LIMIT) {
+            next.backups = `Enter a whole number from 0 to ${MAX_BACKUP_LIMIT}.`;
+        }
 
         setErrors(next);
         setFormError('');
@@ -66,7 +75,8 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
             memoryValue === null ||
             cpuValue === null ||
             diskValue === null ||
-            portValue === null
+            portValue === null ||
+            backupsValue === null
         ) {
             return;
         }
@@ -79,6 +89,7 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
         if (diskValue !== service.disk) changes.disk = diskValue;
         if (portValue !== service.port) changes.port = portValue;
         if (image && image !== service.docker_image) changes.docker_image = image;
+        if (backupsValue !== service.backup_limit) changes.backup_limit = backupsValue;
 
         if (Object.keys(changes).length === 0) {
             onClose();
@@ -155,6 +166,15 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
                         )}
                     </Field>
                 </div>
+
+                <Field
+                    label="Backups to keep"
+                    hint="How many backups this server may have. 0 turns backups off."
+                    error={errors.backups}
+                    className="sm:max-w-xs"
+                >
+                    {(field) => <Input {...field} inputMode="numeric" value={backups} onChange={(event) => setBackups(event.target.value)} />}
+                </Field>
 
                 <Alert tone={portChanged || imageChanged ? 'warning' : 'info'}>
                     Changing the port or image rebuilds the server&apos;s container, which restarts the server if it is running. Its

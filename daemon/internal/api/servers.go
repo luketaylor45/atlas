@@ -259,6 +259,10 @@ func HandlePowerAction(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "This server is being installed. Wait for the installation to finish or cancel it."})
 		return
 	}
+	if backups.restoring(uuid) && (req.Action == "start" || req.Action == "restart") {
+		c.JSON(http.StatusConflict, gin.H{"error": "A backup is being restored to this server. Wait for it to finish."})
+		return
+	}
 
 	log.Printf("[Daemon] Power action %s for %s", req.Action, uuid)
 
@@ -563,6 +567,9 @@ func DeleteServer(c *gin.Context) {
 		}
 	}
 
+	// Nothing may still be reading or writing the files that are about to go.
+	backups.cancelService(uuid)
+
 	_ = docker.Client.ContainerRemove(ctx, installer.ContainerName(uuid), container.RemoveOptions{Force: true})
 	if err := docker.Client.ContainerRemove(ctx, uuid, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove the game container: " + err.Error()})
@@ -574,6 +581,7 @@ func DeleteServer(c *gin.Context) {
 		return
 	}
 	_ = os.Remove(installLogPath(uuid))
+	_ = os.RemoveAll(backupsDir(uuid))
 	removeRuntime(uuid)
 
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})

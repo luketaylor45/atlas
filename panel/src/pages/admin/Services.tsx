@@ -118,11 +118,12 @@ export default function AdminServicesPage() {
     const saved = (updated: Service, warning?: string) => {
         setEditing(null);
         // The response does not carry every relation, so only the edited fields are merged before the refresh.
-        const { name, memory, cpu, disk, port, docker_image } = updated;
+        const { name, memory, cpu, disk, port, docker_image, backup_limit } = updated;
         setServices(
             (current) =>
-                current?.map((item) => (item.id === updated.id ? { ...item, name, memory, cpu, disk, port, docker_image } : item)) ??
-                current,
+                current?.map((item) =>
+                    item.id === updated.id ? { ...item, name, memory, cpu, disk, port, docker_image, backup_limit } : item,
+                ) ?? current,
         );
         toast.success(`${updated.name} was saved.`);
         if (warning) toast.info(warning);

@@ -56,6 +56,9 @@ type AddServiceUserRequest struct {
 	CanEditStartup  bool   `json:"can_edit_startup"`
 	CanControlPower bool   `json:"can_control_power"`
 	CanAccessSFTP   bool   `json:"can_access_sftp"`
+
+	CanManageBackups   bool `json:"can_manage_backups"`
+	CanManageSchedules bool `json:"can_manage_schedules"`
 }
 
 // AddServiceUser adds a sub-user to a service
@@ -111,6 +114,9 @@ func AddServiceUser(c *gin.Context) {
 		CanEditStartup:  req.CanEditStartup,
 		CanControlPower: req.CanControlPower,
 		CanAccessSFTP:   req.CanAccessSFTP,
+
+		CanManageBackups:   req.CanManageBackups,
+		CanManageSchedules: req.CanManageSchedules,
 	}
 
 	if err := database.DB.Create(&serviceUser).Error; err != nil {
@@ -128,12 +134,14 @@ func AddServiceUser(c *gin.Context) {
 	utils.LogActivity(c, service.ID, "user_added", "", "Sub-user added to service", map[string]interface{}{
 		"added_user_id": req.UserID,
 		"permissions": map[string]bool{
-			"console":  req.CanViewConsole,
-			"commands": req.CanSendCommands,
-			"files":    req.CanManageFiles,
-			"startup":  req.CanEditStartup,
-			"power":    req.CanControlPower,
-			"sftp":     req.CanAccessSFTP,
+			"console":   req.CanViewConsole,
+			"commands":  req.CanSendCommands,
+			"files":     req.CanManageFiles,
+			"startup":   req.CanEditStartup,
+			"power":     req.CanControlPower,
+			"sftp":      req.CanAccessSFTP,
+			"backups":   req.CanManageBackups,
+			"schedules": req.CanManageSchedules,
 		},
 	})
 
@@ -167,6 +175,8 @@ func UpdateServiceUser(c *gin.Context) {
 	serviceUser.CanEditStartup = req.CanEditStartup
 	serviceUser.CanControlPower = req.CanControlPower
 	serviceUser.CanAccessSFTP = req.CanAccessSFTP
+	serviceUser.CanManageBackups = req.CanManageBackups
+	serviceUser.CanManageSchedules = req.CanManageSchedules
 
 	// Written as a map: a struct update would skip permissions being set to false.
 	if err := database.DB.Model(&models.ServiceUser{}).Where("id = ?", serviceUser.ID).Updates(map[string]interface{}{
@@ -176,6 +186,9 @@ func UpdateServiceUser(c *gin.Context) {
 		"can_edit_startup":  req.CanEditStartup,
 		"can_control_power": req.CanControlPower,
 		"can_access_sftp":   req.CanAccessSFTP,
+
+		"can_manage_backups":   req.CanManageBackups,
+		"can_manage_schedules": req.CanManageSchedules,
 	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update user"})
 		return

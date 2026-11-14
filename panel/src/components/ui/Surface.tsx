@@ -1,4 +1,4 @@
-import { useState, type HTMLAttributes, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
+import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
 import { AlertTriangle, Check, CheckCircle2, Copy, Info, Loader2, XCircle } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
@@ -268,8 +268,22 @@ export interface TabsProps<T extends string> {
 }
 
 export function Tabs<T extends string>({ tabs, value, onChange, className, label }: TabsProps<T>) {
+    const list = useRef<HTMLDivElement>(null);
+
+    // On a narrow screen the strip scrolls sideways; keep the chosen tab in
+    // view, including when the page opens on a tab near the end.
+    useEffect(() => {
+        const active = list.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+        active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }, [value]);
+
     return (
-        <div role="tablist" aria-label={label} className={cn('flex gap-1 overflow-x-auto border-b border-border', className)}>
+        <div
+            ref={list}
+            role="tablist"
+            aria-label={label}
+            className={cn('flex gap-1 overflow-x-auto border-b border-border [scrollbar-width:none]', className)}
+        >
             {tabs.map((tab) => {
                 const active = tab.id === value;
                 return (

@@ -6,6 +6,8 @@ Atlas is a game server hosting panel designed for performance, modularity, and s
 *   **Infrastructure as Code**: Manage game templates ("Eggs") as JSON files.
 *   **Distributed Architecture**: Deploy multiple game nodes globally from a single panel.
 *   **Hardened Security**: Internal services (API/Database) are hidden from the public by default.
+*   **Ready-made Games**: 26 eggs for Minecraft, Steam and Source servers, plus Pterodactyl egg import.
+*   **Backups and Schedules**: Archive, restore and automate each server from the panel.
 
 ## 🎮 Games
 
@@ -28,6 +30,32 @@ in [`eggs/README.md`](eggs/README.md).
 
 Some games are large (Counter-Strike 2 needs about 60 GB, ARK about 30 GB) and
 some need a lot of memory; each egg's description says what to allow for.
+
+## 💾 Backups and Schedules
+
+**Backups** are made from a server's **Backups** tab: an archive of all of its
+files, which can be downloaded, deleted or restored. Restoring needs the server
+to be stopped, and can either overwrite matching files or replace everything
+with the backup's contents.
+
+*   Archives are kept on the server's node under
+    `DATA_PATH/.atlas/backups/<server id>/` and do not count against the
+    server's disk limit, so leave room for them.
+*   Each server may keep 3 backups by default. An admin can change that under
+    **Admin > All servers > Edit** (0 turns backups off for that server).
+*   Deleting a server deletes its backups.
+
+**Schedules** run one thing at set times from a server's **Schedules** tab: a
+power action (start, stop, restart, kill), a console command, or a backup.
+
+*   Times are read in Core's time zone, which is UTC unless you set
+    `ATLAS_TIMEZONE` in `.env` (for example `ATLAS_TIMEZONE=Europe/London`).
+*   Scheduled backups rotate: once the limit is reached, the oldest scheduled
+    backup makes room for the new one. Backups made by hand are never removed
+    automatically.
+*   A sub-user needs the *Manage backups* or *Manage schedules* permission, and
+    can only schedule actions they are allowed to do by hand.
+*   A schedule that was due while Atlas was down runs once when it comes back.
 
 ## 📦 Production Deployment (Ubuntu)
 

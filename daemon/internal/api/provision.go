@@ -185,6 +185,10 @@ func HandleReinstall(c *gin.Context) {
 		return
 	}
 
+	if backups.restoring(spec.UUID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "A backup is being restored to this server. Wait for it to finish."})
+		return
+	}
 	if !startProvision(spec, true) {
 		c.JSON(http.StatusConflict, gin.H{"error": "An installation is already running for this server"})
 		return
@@ -610,6 +614,7 @@ func HandleListServers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"servers":    servers,
 		"installing": installs.list(),
+		"backups":    backups.list(),
 	})
 }
 

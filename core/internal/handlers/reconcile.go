@@ -29,6 +29,8 @@ type nodeState struct {
 	Servers map[string]string `json:"servers"`
 	// Installing lists the services with an install job in progress.
 	Installing []string `json:"installing"`
+	// Backups lists the backups with a create or restore job in progress.
+	Backups []string `json:"backups"`
 }
 
 // statusCorrection is the change the reconciler wants to make to a service.
@@ -150,6 +152,7 @@ func reconcileNode(node *models.Node, now time.Time) {
 		// An unreachable node says nothing about its servers; leave them be.
 		return
 	}
+	reconcileBackups(node, state.Backups, now)
 
 	installing := make(map[string]bool, len(state.Installing))
 	for _, uuid := range state.Installing {

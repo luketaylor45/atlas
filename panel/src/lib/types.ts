@@ -127,6 +127,8 @@ export interface Service {
     startup_command: string;
     /** JSON-encoded Record<string, string>. */
     environment: string;
+    /** How many backups the server may keep. 0 turns backups off. */
+    backup_limit: number;
     created_at: string;
     updated_at: string;
 }
@@ -139,6 +141,10 @@ export interface ServicePermissions {
     can_edit_startup: boolean;
     can_control_power: boolean;
     can_access_sftp: boolean;
+    /** Includes downloading and restoring. */
+    can_manage_backups: boolean;
+    /** Only for actions the sub-user may also do by hand. */
+    can_manage_schedules: boolean;
 }
 
 export interface ServiceUser extends ServicePermissions {
@@ -155,6 +161,76 @@ export interface ServiceDetails {
     is_owner: boolean;
     /** Present only for sub-users. */
     permissions?: ServiceUser;
+}
+
+export type BackupStatus = 'creating' | 'completed' | 'failed' | 'restoring';
+
+/** An archive of a server's files, kept on the server's node. */
+export interface Backup {
+    id: number;
+    uuid: string;
+    service_id: number;
+    name: string;
+    status: BackupStatus | string;
+    /** Bytes. Zero until the backup has finished. */
+    size: number;
+    checksum: string;
+    /** Why a failed backup failed, or what went wrong the last time a finished one was restored. */
+    error: string;
+    /** Made by a schedule. These are replaced, oldest first, once the limit is reached. */
+    automated: boolean;
+    created_at: string;
+    completed_at: string | null;
+}
+
+/** Response of GET /services/:uuid/backups. */
+export interface BackupList {
+    /** Newest first. */
+    backups: Backup[];
+    /** How many backups the server may keep. 0 means backups are turned off. */
+    limit: number;
+}
+
+export type ScheduleAction = 'power' | 'command' | 'backup';
+
+export type ScheduleRunStatus = '' | 'success' | 'failed' | 'skipped';
+
+/** Something a server does by itself at the times a cron expression names. */
+export interface Schedule {
+    id: number;
+    service_id: number;
+    name: string;
+    /** Five fields: minute, hour, day of month, month, day of week. Read in the panel server's time zone. */
+    cron: string;
+    action: ScheduleAction | string;
+    /** The power action, the console command, or the name to give the backups. */
+    payload: string;
+    enabled: boolean;
+    /** Skips a run while the server is not running. */
+    only_when_online: boolean;
+    next_run_at: string | null;
+    last_run_at: string | null;
+    last_status: ScheduleRunStatus | string;
+    last_message: string;
+}
+
+/** Response of GET /services/:uuid/schedules. */
+export interface ScheduleList {
+    schedules: Schedule[];
+    /** The zone the cron fields are read in: an IANA name, "Local" or "UTC". */
+    timezone: string;
+    timezone_abbr: string;
+    /** Seconds east of UTC. */
+    timezone_offset: number;
+    /** The panel server's clock when it answered. */
+    now: string;
+}
+
+/** Response of POST /services/:uuid/schedules/:id/run when the run did not fail. */
+export interface ScheduleRun {
+    status: 'success' | 'skipped';
+    message: string;
+    schedule: Schedule;
 }
 
 export interface ActivityLog {

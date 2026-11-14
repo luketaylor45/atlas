@@ -6,6 +6,8 @@ package router_test
 //   ATLAS_DEV_SERVER=1 go test ./internal/router/ -run TestDevServer -timeout 0
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +24,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/luketaylor45/atlas/core/internal/config"
 	"github.com/luketaylor45/atlas/core/internal/database"
+	"github.com/luketaylor45/atlas/core/internal/handlers"
 	"github.com/luketaylor45/atlas/core/internal/models"
 	"github.com/luketaylor45/atlas/core/internal/router"
 	"golang.org/x/crypto/bcrypt"
@@ -128,6 +131,20 @@ func demoNode(token string) *httptest.Server {
 		case strings.HasSuffix(path, "/command"):
 			time.Sleep(150 * time.Millisecond)
 			reply(map[string]string{"status": "sent"})
+		case strings.HasSuffix(path, "/backups") && r.Method == http.MethodPost:
+			var body struct {
+				ID string `json:"id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			go demoBackupReport(token, body.ID, map[string]interface{}{"operation": "create", "status": "completed", "size": 734003200, "checksum": "sha256:demo"})
+			reply(map[string]string{"status": "creating"})
+		case strings.HasSuffix(path, "/restore"):
+			parts := strings.Split(strings.Trim(path, "/"), "/")
+			go demoBackupReport(token, parts[len(parts)-2], map[string]interface{}{"operation": "restore", "status": "completed"})
+			reply(map[string]string{"status": "restoring"})
+		case strings.HasSuffix(path, "/download"):
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write([]byte("this is where the backup archive would be\n"))
 		case path == "/api/servers" && r.Method == http.MethodGet:
 			reply(map[string]interface{}{"servers": map[string]string{}, "installing": []string{}})
 		default:
@@ -135,6 +152,22 @@ func demoNode(token string) *httptest.Server {
 			reply(map[string]string{"status": "ok"})
 		}
 	}))
+}
+
+// demoBackupReport tells the demo backend that a backup job ended, the way a
+// node does a little while after it was asked to start one.
+func demoBackupReport(token string, id string, payload map[string]interface{}) {
+	time.Sleep(6 * time.Second)
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/v1/internal/backups/"+id+"/status", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Node-Token", token)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
 func TestDevServer(t *testing.T) {
@@ -178,10 +211,13 @@ func TestDevServer(t *testing.T) {
 		must(t, db.Create(nest).Error)
 	}
 
-	paper := models.Egg{UUID: "atlas-mc-paper", NestID: minecraft.ID, Available: true, Author: "Atlas", Name: "Paper", Description: "High performance Minecraft server.", DockerImages: `["ghcr.io/ptero-eggs/yolks:java_25","ghcr.io/ptero-eggs/yolks:java_21","ghcr.io/ptero-eggs/yolks:java_17"]`, StartupCommand: "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}", StopCommand: "stop", ScriptInstall: "#!/bin/ash\nset -eu\necho installing\n", ScriptContainer: "ghcr.io/pterodactyl/installers:alpine", ScriptEntry: "ash", Source: "catalog"}
+	paper := models.Egg{UUID: "atlas-mc-paper", NestID: minecraft.ID, Available: true, Author: "Atlas", Name: "Paper", Description: "High performance Minecraft server.", DockerImages: `["ghcr.io/ptero-eggs/yolks:java_25","ghcr.io/ptero-eggs/yolks:java_21","ghcr.io/ptero-eggs/yolks:java_17"]`, StartupCommand: "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}", StopCommand: "stop", ScriptInstall: "#!/bin/ash\nset -eu\necho installing\n", ScriptContainer: "ghcr.io/pterodactyl/installers:alpine", ScriptEntry: "ash", Source: "catalog",
+		StartupDone: `["Done ("]`, ConfigFiles: `{"server.properties":{"parser":"properties","find":{"server-ip":"0.0.0.0","server-port":"{{server.build.default.port}}","query.port":"{{server.build.default.port}}"}}}`}
+	valheim := models.Egg{UUID: "atlas-valheim", NestID: games.ID, Available: true, Author: "Atlas", Name: "Valheim", Description: "Viking survival for up to ten players. Allow 4 GB of memory and 3 GB of disk.", DockerImages: `["ghcr.io/ptero-eggs/games:valheim"]`, StartupCommand: "./valheim_server.x86_64 -port {{SERVER_PORT}} -name \"{{SERVER_NAME}}\"", StopCommand: "stop", ScriptInstall: "#!/bin/bash\necho hi\n", ScriptContainer: "ghcr.io/pterodactyl/installers:debian", ScriptEntry: "bash", Source: "catalog",
+		StartupDone: `["Game server connected"]`, Ports: `[{"name":"Query","env":"QUERY_PORT","default":2457,"protocol":"udp","offset":1}]`}
 	palworld := models.Egg{UUID: "egg-palworld", NestID: games.ID, Available: true, Author: "Imported", Name: "Palworld", Description: "Survival and creature collecting.", DockerImages: `["ghcr.io/ptero-eggs/steamcmd:debian"]`, StartupCommand: "./PalServer.sh -port={{SERVER_PORT}}", StopCommand: "^C", ScriptInstall: "#!/bin/bash\necho hi\n", ScriptContainer: "ghcr.io/pterodactyl/installers:debian", ScriptEntry: "bash", Ports: `[{"name":"Query","env":"QUERY_PORT","default":27015,"protocol":"udp"},{"name":"RCON","env":"RCON_PORT","default":25575,"protocol":"tcp"}]`, Source: "import", Customized: true}
 	sandbox := models.Egg{UUID: "atlas-gmod-x64", NestID: gmod.ID, Available: true, Author: "Atlas", Name: "Modern (x86-64)", Description: "64-bit Garry's Mod branch.", DockerImages: `["ghcr.io/ptero-eggs/games:source"]`, StartupCommand: "./srcds_run_x64 -game garrysmod -port {{SERVER_PORT}} +map {{SRCDS_MAP}}", StopCommand: "quit", ScriptContainer: "ghcr.io/pterodactyl/installers:debian", ScriptEntry: "bash", Source: "catalog"}
-	for _, egg := range []*models.Egg{&paper, &palworld, &sandbox} {
+	for _, egg := range []*models.Egg{&paper, &palworld, &sandbox, &valheim} {
 		must(t, db.Create(egg).Error)
 	}
 	variable := func(egg models.Egg, name, env, value, description string, editable, viewable bool, input string) {
@@ -197,6 +233,16 @@ func TestDevServer(t *testing.T) {
 	variable(sandbox, "Steam token", "STEAM_TOKEN", "", "Game server login token.", true, true, "password")
 	variable(palworld, "Server name", "SERVER_NAME", "An Atlas hosted Palworld Server", "", true, true, "text")
 	variable(palworld, "Admin password", "ADMIN_PASSWORD", "", "", true, true, "password")
+	ruled := func(egg models.Egg, name, env, value, description, rules string) {
+		row := models.EggVariable{EggID: egg.ID, Name: name, EnvironmentVariable: env, DefaultValue: value, Description: description, Rules: rules, InputType: "text"}
+		must(t, db.Create(&row).Error)
+	}
+	ruled(paper, "Difficulty", "DIFFICULTY", "normal", "How hard the world is.", "required|string|in:peaceful,easy,normal,hard")
+	ruled(paper, "Max players", "MAX_PLAYERS", "20", "How many players can join at once.", "required|integer|between:1,200")
+	ruled(paper, "Allow flight", "ALLOW_FLIGHT", "0", "Lets players fly in survival mode.", "required|boolean")
+	ruled(valheim, "Server name", "SERVER_NAME", "My Valheim Server", "Shown in the server browser.", "required|string|max:60")
+	ruled(valheim, "Password", "SERVER_PASSWORD", "changeme123", "At least five characters.", "required|string|min:5")
+	ruled(valheim, "Update on start", "AUTO_UPDATE", "1", "Checks for a new version each time the server starts.", "required|boolean")
 
 	service := func(uuid, name string, owner models.User, node models.Node, egg models.Egg, port int, status, stage string, progress int, image string) models.Service {
 		row := models.Service{UUID: uuid, Name: name, UserID: owner.ID, NodeID: node.ID, EggID: egg.ID, Memory: 8192, Disk: 40000, Cpu: 400, Port: port, DockerImage: image, Status: status, InstallationStage: stage, InstallationProgress: progress, StartupCommand: egg.StartupCommand, Environment: "{}"}
@@ -212,6 +258,21 @@ func TestDevServer(t *testing.T) {
 	must(t, db.Create(&models.ServicePort{ServiceID: pal.ID, NodeID: primary.ID, Port: 27016, Env: "QUERY_PORT", Name: "Query", Protocol: "udp"}).Error)
 	must(t, db.Create(&models.ServicePort{ServiceID: pal.ID, NodeID: primary.ID, Port: 25575, Env: "RCON_PORT", Name: "RCON", Protocol: "tcp"}).Error)
 	_ = failed
+
+	// Backups and schedules for the server most demos open.
+	must(t, db.Model(&models.Service{}).Where("id = ?", survival.ID).Update("backup_limit", 5).Error)
+	done := time.Now().Add(-26 * time.Hour)
+	must(t, db.Create(&models.Backup{UUID: "f1f1f1f1-aaaa-4aaa-8aaa-000000000001", ServiceID: survival.ID, Name: "Before the 1.21 update", Status: models.BackupCompleted, Size: 1288490188, Checksum: "sha256:demo", CreatedAt: done, CompletedAt: &done}).Error)
+	nightly := time.Now().Add(-5 * time.Hour)
+	must(t, db.Create(&models.Backup{UUID: "f1f1f1f1-aaaa-4aaa-8aaa-000000000002", ServiceID: survival.ID, Name: "Nightly backup 2026-11-14 03:00", Status: models.BackupCompleted, Size: 1341103308, Checksum: "sha256:demo", Automated: true, CreatedAt: nightly, CompletedAt: &nightly}).Error)
+	must(t, db.Create(&models.Backup{UUID: "f1f1f1f1-aaaa-4aaa-8aaa-000000000003", ServiceID: survival.ID, Name: "Quick save", Status: models.BackupFailed, Error: "write /var/lib/atlas/data/.atlas/backups: no space left on device", CreatedAt: time.Now().Add(-90 * time.Minute)}).Error)
+
+	lastRun := time.Now().Add(-5 * time.Hour)
+	nextNight := time.Now().Add(19 * time.Hour)
+	nextRestart := time.Now().Add(20 * time.Hour)
+	must(t, db.Create(&models.Schedule{ServiceID: survival.ID, Name: "Nightly backup", Cron: "0 3 * * *", Action: models.ScheduleActionBackup, Enabled: true, NextRunAt: &nextNight, LastRunAt: &lastRun, LastStatus: "success", LastMessage: "Started the backup \"Nightly backup 2026-11-14 03:00\"."}).Error)
+	must(t, db.Create(&models.Schedule{ServiceID: survival.ID, Name: "Restart every morning", Cron: "0 4 * * *", Action: models.ScheduleActionPower, Payload: "restart", Enabled: true, OnlyWhenOnline: true, NextRunAt: &nextRestart}).Error)
+	must(t, db.Create(&models.Schedule{ServiceID: survival.ID, Name: "Restart warning", Cron: "55 3 * * 1,3,5", Action: models.ScheduleActionCommand, Payload: "say The server restarts in five minutes", Enabled: false, LastRunAt: &lastRun, LastStatus: "skipped", LastMessage: "The server was not running, so the command was not sent."}).Error)
 
 	// matt can see Survival SMP's console and files only.
 	grant := models.ServiceUser{ServiceID: survival.ID, UserID: friend.ID, CanManageFiles: true}
@@ -231,6 +292,7 @@ func TestDevServer(t *testing.T) {
 
 	engine := gin.New()
 	router.Setup(engine)
+	go handlers.StartScheduler(context.Background())
 	fmt.Println("Atlas demo backend on http://localhost:8080 — users admin / luke / matt, password atlas-demo-pass")
 	must(t, engine.Run("127.0.0.1:8080"))
 }

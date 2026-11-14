@@ -17,6 +17,9 @@ type ServiceUser struct {
 	CanEditStartup  bool `gorm:"default:false" json:"can_edit_startup"`
 	CanControlPower bool `gorm:"default:false" json:"can_control_power"`
 	CanAccessSFTP   bool `gorm:"default:false" json:"can_access_sftp"`
+	// Backups include downloading and restoring them.
+	CanManageBackups   bool `gorm:"default:false" json:"can_manage_backups"`
+	CanManageSchedules bool `gorm:"default:false" json:"can_manage_schedules"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

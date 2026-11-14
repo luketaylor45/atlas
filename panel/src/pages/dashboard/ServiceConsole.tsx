@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { Folder, History, Rocket, Settings, SquareTerminal, Users } from 'lucide-react';
+import { Archive, CalendarClock, Folder, History, Rocket, Settings, SquareTerminal, Users } from 'lucide-react';
 import api from '../../lib/api';
 import { errorMessage } from '../../lib/errors';
 import { isInstallState } from '../../lib/status';
@@ -10,14 +10,16 @@ import { Alert, Button, EmptyState, LoadingState, Tabs, useConfirm, useToast, ty
 import FileManager from './FileManager';
 import ServiceActivityTab from './ServiceActivityTab';
 import ServiceUsersTab from './ServiceUsersTab';
+import { BackupsTab } from './service/BackupsTab';
 import { ConsoleTab, type ConsoleHandle } from './service/ConsoleTab';
 import { InstallView } from './service/InstallView';
+import { SchedulesTab } from './service/SchedulesTab';
 import { ServerHeader } from './service/ServerHeader';
 import { SettingsTab } from './service/SettingsTab';
 import { StartupTab } from './service/StartupTab';
 import { serviceAccess, type PowerAction } from './service/shared';
 
-type TabId = 'console' | 'files' | 'startup' | 'users' | 'activity' | 'settings';
+type TabId = 'console' | 'files' | 'startup' | 'backups' | 'schedules' | 'users' | 'activity' | 'settings';
 
 const powerNotices: Record<PowerAction, string> = {
     start: 'Starting server…',
@@ -162,6 +164,8 @@ function ServicePage({ uuid }: { uuid: string }) {
         { id: 'console', label: 'Console', icon: <SquareTerminal size={16} aria-hidden />, show: access.canConsole },
         { id: 'files', label: 'Files', icon: <Folder size={16} aria-hidden />, show: access.canFiles },
         { id: 'startup', label: 'Startup', icon: <Rocket size={16} aria-hidden />, show: access.canStartup },
+        { id: 'backups', label: 'Backups', icon: <Archive size={16} aria-hidden />, show: access.canBackups },
+        { id: 'schedules', label: 'Schedules', icon: <CalendarClock size={16} aria-hidden />, show: access.canSchedules },
         { id: 'users', label: 'Users', icon: <Users size={16} aria-hidden />, show: access.isOwner },
         { id: 'activity', label: 'Activity', icon: <History size={16} aria-hidden />, show: access.isOwner },
         { id: 'settings', label: 'Settings', icon: <Settings size={16} aria-hidden />, show: access.canPower },
@@ -208,6 +212,8 @@ function ServicePage({ uuid }: { uuid: string }) {
                             {activeTab === 'console' && <ConsoleTab ref={consoleRef} service={service} access={access} />}
                             {activeTab === 'files' && <FileManager uuid={uuid} service={service} />}
                             {activeTab === 'startup' && <StartupTab service={service} onSaved={startupSaved} />}
+                            {activeTab === 'backups' && <BackupsTab service={service} />}
+                            {activeTab === 'schedules' && <SchedulesTab service={service} access={access} />}
                             {activeTab === 'users' && <ServiceUsersTab uuid={uuid} />}
                             {activeTab === 'activity' && <ServiceActivityTab uuid={uuid} />}
                             {activeTab === 'settings' && <SettingsTab service={service} onReinstall={reinstall} onChanged={load} />}

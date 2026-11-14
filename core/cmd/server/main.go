@@ -49,6 +49,7 @@ func main() {
 	router.Setup(r)
 
 	go handlers.StartReconciler(context.Background())
+	go handlers.StartScheduler(context.Background())
 
 	log.Printf("Atlas Core starting on port %s", config.AppConfig.Port)
 	if err := r.Run(":" + config.AppConfig.Port); err != nil {

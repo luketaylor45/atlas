@@ -33,6 +33,10 @@ func PermissionCheck(userID uint, serviceID uint, permission string) (bool, bool
 		return serviceUser.CanControlPower, false
 	case "can_access_sftp":
 		return serviceUser.CanAccessSFTP, false
+	case "can_manage_backups":
+		return serviceUser.CanManageBackups, false
+	case "can_manage_schedules":
+		return serviceUser.CanManageSchedules, false
 	}
 
 	return false, false

@@ -281,13 +281,7 @@ func ServicePowerAction(c *gin.Context) {
 		return
 	}
 
-	payload := withEggRuntime(map[string]interface{}{
-		"action":          req.Action,
-		"startup_command": resolveStartupCommand(service),
-		"environment":     mustJSON(mergedEnvironment(service)),
-		"memory":          service.Memory,
-		"port":            service.Port,
-	}, &service.Egg)
+	payload := powerPayload(service, req.Action)
 
 	resp, err := daemonJSON(daemonHTTP, &service.Node, http.MethodPost, fmt.Sprintf("/api/servers/%s/power", service.UUID), payload)
 	if err != nil {

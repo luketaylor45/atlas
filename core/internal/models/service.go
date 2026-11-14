@@ -39,6 +39,10 @@ type Service struct {
 
 	DockerImage string `gorm:"size:255" json:"docker_image"`
 
+	// BackupLimit is how many backups the service may keep. Zero turns
+	// backups off for it.
+	BackupLimit int `gorm:"not null;default:3" json:"backup_limit"`
+
 	IsSuspended          bool   `gorm:"default:false" json:"is_suspended"`
 	Status               string `gorm:"default:'installing'" json:"status"` // installing, running, offline
 	InstallationStage    string `gorm:"size:255;default:''" json:"installation_stage"`

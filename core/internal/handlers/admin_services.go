@@ -239,6 +239,12 @@ func purgeService(service *models.Service) error {
 		if err := tx.Exec("DELETE FROM activity_logs WHERE service_id = ?", service.ID).Error; err != nil {
 			return err
 		}
+		if err := deleteServiceBackups(tx, service.ID); err != nil {
+			return err
+		}
+		if err := tx.Where("service_id = ?", service.ID).Delete(&models.Schedule{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Delete(&models.Service{}, service.ID).Error
 	})
 }
@@ -366,6 +372,7 @@ type UpdateServiceRequest struct {
 	Cpu         *uint64 `json:"cpu"`
 	DockerImage *string `json:"docker_image"`
 	Port        *int    `json:"port"`
+	BackupLimit *int    `json:"backup_limit"`
 }
 
 // UpdateService changes a service's name, limits, image or primary port.
@@ -413,6 +420,13 @@ func UpdateService(c *gin.Context) {
 			return
 		}
 		updates["cpu"] = *req.Cpu
+	}
+	if req.BackupLimit != nil {
+		if *req.BackupLimit < 0 || *req.BackupLimit > maxBackupLimit {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("The backup limit must be between 0 and %d", maxBackupLimit)})
+			return
+		}
+		updates["backup_limit"] = *req.BackupLimit
 	}
 	if memory != existing.Memory || disk != existing.Disk {
 		if err := checkNodeResources(existing.NodeID, memory, disk, existing.ID); err != nil {

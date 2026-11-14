@@ -34,6 +34,8 @@ func AllModels() []interface{} {
 		&models.ServiceUser{},
 		&models.ActivityLog{},
 		&models.News{},
+		&models.Backup{},
+		&models.Schedule{},
 	}
 }
 

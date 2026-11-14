@@ -43,6 +43,7 @@ func Setup(r *gin.Engine) {
 		{
 			internal.POST("/heartbeat", handlers.HandleHeartbeat)
 			internal.POST("/services/:uuid/status", handlers.HandleServerStatusUpdate)
+			internal.POST("/backups/:backup/status", handlers.HandleBackupStatusUpdate)
 			internal.POST("/sftp/validate", handlers.ValidateSFTPCredentials)
 		}
 
@@ -83,6 +84,9 @@ func Setup(r *gin.Engine) {
 		// The console websocket authenticates with a single-use style ticket
 		// instead of the session header, which browsers cannot send on a socket.
 		api.GET("/services/:uuid/console/ws", handlers.ServiceConsoleSocket)
+		// Backup downloads are followed by the browser itself and carry a
+		// ticket for the same reason.
+		api.GET("/services/:uuid/backups/:backup/download", handlers.DownloadBackup)
 
 		// User Service Routes
 		services := api.Group("/services")
@@ -115,6 +119,20 @@ func Setup(r *gin.Engine) {
 			services.POST("/:uuid/users", handlers.AddServiceUser)
 			services.PUT("/:uuid/users/:userId", handlers.UpdateServiceUser)
 			services.DELETE("/:uuid/users/:userId", handlers.RemoveServiceUser)
+
+			// Backups
+			services.GET("/:uuid/backups", handlers.ListBackups)
+			services.POST("/:uuid/backups", handlers.CreateBackup)
+			services.DELETE("/:uuid/backups/:backup", handlers.DeleteBackup)
+			services.POST("/:uuid/backups/:backup/restore", handlers.RestoreBackup)
+			services.POST("/:uuid/backups/:backup/download", handlers.CreateBackupDownload)
+
+			// Schedules
+			services.GET("/:uuid/schedules", handlers.ListSchedules)
+			services.POST("/:uuid/schedules", handlers.CreateSchedule)
+			services.PUT("/:uuid/schedules/:schedule", handlers.UpdateSchedule)
+			services.DELETE("/:uuid/schedules/:schedule", handlers.DeleteSchedule)
+			services.POST("/:uuid/schedules/:schedule/run", handlers.RunScheduleNow)
 
 			// Activity Logs
 			services.GET("/:uuid/logs", handlers.GetServiceActivityLogs)

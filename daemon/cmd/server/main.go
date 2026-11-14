@@ -75,6 +75,10 @@ func main() {
 	server.POST("/rebuild", api.HandleRebuild)
 	server.POST("/install/cancel", api.HandleCancelInstall)
 	server.GET("/install/log", api.HandleInstallLog)
+	server.POST("/backups", api.HandleCreateBackup)
+	server.DELETE("/backups/:backup", api.HandleDeleteBackup)
+	server.POST("/backups/:backup/restore", api.HandleRestoreBackup)
+	server.GET("/backups/:backup/download", api.HandleDownloadBackup)
 	server.PUT("", api.UpdateServer)
 	server.DELETE("", api.DeleteServer)
 
