@@ -1,17 +1,16 @@
-import { Outlet } from 'react-router-dom';
+import { Navigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../../context/auth';
 
+/**
+ * Guards every /admin route. The API enforces this too; the guard keeps
+ * non-admins from landing on pages that would only show errors.
+ */
 export default function AdminLayout() {
-    return (
-        <div className="p-8 max-w-7xl mx-auto animation-enter">
-            <div className="mb-8">
-                <h1 className="text-3xl font-bold tracking-tight mb-2">Platform Administration</h1>
-                <p className="text-muted">Manage nodes, services, and system-wide user accounts.</p>
-            </div>
+    const { user } = useAuth();
 
-            {/* Navigation is now handled by the primary sidebar */}
-            <div className="h-px bg-border mb-8" />
+    if (!user?.is_admin) {
+        return <Navigate to="/" replace />;
+    }
 
-            <Outlet />
-        </div>
-    );
+    return <Outlet />;
 }

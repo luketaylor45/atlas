@@ -1,111 +1,149 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
+import { LogOut } from 'lucide-react';
+import { PasswordInput } from '../../components/AuthShell';
+import ThemeToggle from '../../components/ThemeToggle';
+import { Alert, Button, Card, CardHeader, Field, PageHeader, useToast } from '../../components/ui';
 import { useAuth } from '../../context/auth';
-import { User, Shield, Lock, Bell, Terminal, Palette, Globe } from 'lucide-react';
-import clsx from 'clsx';
+import api from '../../lib/api';
+import { errorMessage, errorStatus } from '../../lib/errors';
+import { PASSWORD_HINT, validateConfirmation, validatePassword } from '../auth/account';
 
-type SettingsTab = 'profile' | 'security' | 'appearance' | 'notifications';
+interface PasswordErrors {
+    current?: string;
+    next?: string;
+    confirmation?: string;
+}
 
-export default function SettingsPage() {
-    const { user } = useAuth();
-    const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
+function ChangePasswordCard() {
+    const toast = useToast();
+    const [current, setCurrent] = useState('');
+    const [next, setNext] = useState('');
+    const [confirmation, setConfirmation] = useState('');
+    const [fieldErrors, setFieldErrors] = useState<PasswordErrors>({});
+    const [error, setError] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    const handleSubmit = async (event: FormEvent) => {
+        event.preventDefault();
+        setError('');
+
+        const problems: PasswordErrors = {
+            current: current ? undefined : 'Enter your current password.',
+            next: validatePassword(next) ?? (next === current ? 'Choose a password different from your current one.' : undefined),
+            confirmation: validateConfirmation(next, confirmation),
+        };
+        setFieldErrors(problems);
+        if (problems.current || problems.next || problems.confirmation) return;
+
+        setSubmitting(true);
+        try {
+            await api.post('/auth/password', { current_password: current, new_password: next });
+            setCurrent('');
+            setNext('');
+            setConfirmation('');
+            toast.success('Your password has been changed.');
+        } catch (err) {
+            if (errorStatus(err) === 403) {
+                setFieldErrors({ current: errorMessage(err, 'Your current password is incorrect.') });
+            } else {
+                setError(errorMessage(err, 'Could not change your password. Please try again.'));
+            }
+        } finally {
+            setSubmitting(false);
+        }
+    };
 
     return (
-        <div className="max-w-5xl mx-auto animation-enter">
-            <div className="mb-10">
-                <h1 className="text-4xl font-bold tracking-tight mb-2">Account Settings</h1>
-                <p className="text-muted text-lg">Manage your identity, security preferences, and dashboard customization.</p>
-            </div>
+        <Card>
+            <CardHeader
+                title="Change password"
+                description="This password is also used for SFTP access to your servers."
+            />
+            <form onSubmit={handleSubmit} noValidate className="space-y-4">
+                {error && <Alert tone="danger">{error}</Alert>}
 
-            <div className="flex flex-col lg:flex-row gap-10">
-                {/* Navigation */}
-                <div className="w-full lg:w-64 shrink-0 flex flex-col gap-1">
-                    {[
-                        { id: 'profile', label: 'My Identity', icon: User },
-                        { id: 'security', label: 'Security & Keys', icon: Shield },
-                        { id: 'appearance', label: 'Interface', icon: Palette },
-                        { id: 'notifications', label: 'Alerts', icon: Bell },
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id as SettingsTab)}
-                            className={clsx(
-                                "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all",
-                                activeTab === tab.id ? "bg-primary text-white shadow-lg shadow-primary/20" : "text-muted hover:text-foreground hover:bg-secondary/50"
-                            )}
-                        >
-                            <tab.icon size={18} />
-                            {tab.label}
-                        </button>
-                    ))}
+                <Field label="Current password" error={fieldErrors.current}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
+                            name="current-password"
+                            autoComplete="current-password"
+                            value={current}
+                            onChange={(event) => setCurrent(event.target.value)}
+                        />
+                    )}
+                </Field>
+
+                <Field label="New password" hint={PASSWORD_HINT} error={fieldErrors.next}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
+                            name="new-password"
+                            autoComplete="new-password"
+                            value={next}
+                            onChange={(event) => setNext(event.target.value)}
+                        />
+                    )}
+                </Field>
+
+                <Field label="Confirm new password" error={fieldErrors.confirmation}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
+                            name="confirm-password"
+                            autoComplete="new-password"
+                            value={confirmation}
+                            onChange={(event) => setConfirmation(event.target.value)}
+                        />
+                    )}
+                </Field>
+
+                <Button type="submit" variant="primary" loading={submitting}>
+                    Change password
+                </Button>
+            </form>
+        </Card>
+    );
+}
+
+export default function SettingsPage() {
+    const { user, logout } = useAuth();
+
+    return (
+        <>
+            <PageHeader title="Settings" description="Your account, password and how Atlas looks on this device." />
+
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+                <div className="space-y-6">
+                    <Card>
+                        <CardHeader title="Account" description="An administrator can change your username or role." />
+                        <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
+                            <div className="min-w-0">
+                                <dt className="text-muted">Username</dt>
+                                <dd className="mt-1 break-words font-medium text-foreground">{user?.username}</dd>
+                            </div>
+                            <div>
+                                <dt className="text-muted">Role</dt>
+                                <dd className="mt-1 font-medium text-foreground">{user?.is_admin ? 'Administrator' : 'Member'}</dd>
+                            </div>
+                        </dl>
+                    </Card>
+
+                    <Card>
+                        <CardHeader title="Appearance" description="Choose a light or dark theme. System follows your device's setting." />
+                        <ThemeToggle showLabels />
+                    </Card>
+
+                    <Card>
+                        <CardHeader title="Sign out" description="End your session on this device." className="mb-4" />
+                        <Button variant="outline" icon={<LogOut size={16} aria-hidden />} onClick={logout}>
+                            Sign out
+                        </Button>
+                    </Card>
                 </div>
 
-                {/* Content */}
-                <div className="flex-1">
-                    {activeTab === 'profile' && (
-                        <div className="space-y-8 animate-in slide-in-from-bottom-2 duration-300">
-                            <div className="panel-card p-8">
-                                <h3 className="text-xl font-bold mb-6">Profile Information</h3>
-                                <div className="space-y-6">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold uppercase tracking-widest text-muted ml-1">Username</label>
-                                            <input disabled value={user?.username} className="w-full bg-secondary/30 border border-border/50 rounded-xl px-4 py-3 text-sm font-bold opacity-70" />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold uppercase tracking-widest text-muted ml-1">Account Role</label>
-                                            <div className="w-full bg-secondary/30 border border-border/50 rounded-xl px-4 py-3 text-sm font-bold text-primary italic">
-                                                {user?.is_admin ? 'Platform Administrator' : 'Standard User'}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 flex gap-4">
-                                        <Globe size={20} className="text-primary shrink-0 mt-1" />
-                                        <p className="text-xs text-muted leading-relaxed">
-                                            Your account is synchronized across the Atlas Network. Contact your system admin to modify your username or permissions.
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="panel-card p-8 border-red-500/20">
-                                <h3 className="text-xl font-bold text-red-500 mb-2 font-bold tracking-tight">Danger Zone</h3>
-                                <p className="text-sm text-muted mb-6">Permanently delete your account and all associated data.</p>
-                                <button className="px-6 py-2 rounded-xl bg-red-600/10 text-red-500 border border-red-500/20 font-bold text-xs hover:bg-red-600 hover:text-white transition-all">Deactivate Identity</button>
-                            </div>
-                        </div>
-                    )}
-
-                    {activeTab === 'security' && (
-                        <div className="space-y-8 animate-in slide-in-from-bottom-2 duration-300">
-                            <div className="panel-card p-8">
-                                <h3 className="text-xl font-bold mb-6 flex items-center gap-3"><Lock size={20} className="text-primary" /> Update Password</h3>
-                                <div className="space-y-4 max-w-md">
-                                    <input type="password" placeholder="Current Password" className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 text-sm" />
-                                    <input type="password" placeholder="New Password" className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 text-sm" />
-                                    <button className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20">Update Security Credentials</button>
-                                </div>
-                            </div>
-
-                            <div className="panel-card p-8 bg-secondary/10 border-dashed">
-                                <div className="text-center py-6">
-                                    <Shield size={40} className="mx-auto text-muted mb-4 opacity-20" />
-                                    <h4 className="font-bold mb-1">Two-Factor Authentication</h4>
-                                    <p className="text-xs text-muted max-w-xs mx-auto">Hardware security keys and TOTP generators can be linked to your Atlas identity for enhanced reach protection.</p>
-                                    <button disabled className="mt-6 px-6 py-2 rounded-xl bg-secondary text-muted font-bold text-xs uppercase cursor-not-allowed">Coming in Next Cluster Sync</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {(activeTab === 'appearance' || activeTab === 'notifications') && (
-                        <div className="panel-card p-20 flex flex-col items-center justify-center text-center opacity-50">
-                            <Terminal size={48} className="mb-4 text-primary" />
-                            <h3 className="text-xl font-bold">Encrypted Configuration Block</h3>
-                            <p className="text-sm text-muted mt-2">Custom {activeTab} preference data is currently restricted by node policy.</p>
-                        </div>
-                    )}
-                </div>
+                <ChangePasswordCard />
             </div>
-        </div>
+        </>
     );
 }

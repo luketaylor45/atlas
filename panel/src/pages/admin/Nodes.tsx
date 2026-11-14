@@ -1,276 +1,367 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useId, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { KeyRound, Pencil, Plus, Trash2, Waypoints } from 'lucide-react';
+import {
+    Alert,
+    Button,
+    Card,
+    EmptyState,
+    IconButton,
+    LoadingState,
+    Modal,
+    NodeStatusBadge,
+    PageHeader,
+    Table,
+    Td,
+    Th,
+    Tr,
+    useConfirm,
+    useToast,
+} from '../../components/ui';
 import api from '../../lib/api';
-import { Server, HardDrive, Plus, Globe, CheckCircle, XCircle, Trash2, Settings, X, AlertTriangle } from 'lucide-react';
-import clsx from 'clsx';
-import { formatDistanceToNow } from 'date-fns';
+import { errorMessage } from '../../lib/errors';
+import { formatDateTime, formatMB, formatRelative } from '../../lib/format';
+import type { Node } from '../../lib/types';
+import { usePolling } from '../../lib/usePolling';
+import { NodeFormFields } from './shared/NodeFormFields';
+import {
+    changedNodeFields,
+    nodeFormToPayload,
+    nodeToForm,
+    validateNodeForm,
+    type NodeFormErrors,
+    type NodeFormValues,
+} from './shared/NodeFormState';
+import { NodeToken, NodeTokenSteps } from './shared/NodeToken';
+import { NodeUsage } from './shared/NodeUsage';
 
-interface Node {
-    id: number;
-    name: string;
-    address: string;
-    internal_address?: string;
-    port: string;
-    is_online: boolean;
-    location?: string;
-    total_ram?: number;
-    total_disk?: number;
-    last_heartbeat?: string;
-}
+const primaryLink =
+    'inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-control bg-primary px-4 text-sm font-medium ' +
+    'text-primary-foreground shadow-card transition-colors hover:bg-primary-hover';
 
-export default function NodesPage() {
-    const navigate = useNavigate();
-    const [nodes, setNodes] = useState<Node[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [editingNode, setEditingNode] = useState<Node | null>(null);
+function EditNodeModal({ node, onClose, onSaved }: { node: Node; onClose: () => void; onSaved: (node: Node) => void }) {
+    const toast = useToast();
+    const formId = useId();
+    const [values, setValues] = useState<NodeFormValues>(() => nodeToForm(node));
+    const [errors, setErrors] = useState<NodeFormErrors>({});
+    const [formError, setFormError] = useState<string | null>(null);
+    const [saving, setSaving] = useState(false);
 
-    const fetchNodes = () => {
-        api.get<Node[]>('/admin/nodes')
-            .then(res => setNodes(res.data))
-            .catch(err => console.error(err))
-            .finally(() => setLoading(false));
+    const change = (field: keyof NodeFormValues, value: string) => {
+        setValues((current) => ({ ...current, [field]: value }));
+        setErrors((current) => ({ ...current, [field]: undefined }));
     };
 
-    useEffect(() => {
-        fetchNodes();
-    }, []);
+    const submit = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (saving) return;
 
-    const handleDelete = async (id: number) => {
-        if (!confirm("Are you sure you want to delete this node? All services on this node will be disconnected from the controller.")) return;
+        const problems = validateNodeForm(values);
+        setErrors(problems);
+        if (Object.keys(problems).length > 0) return;
+
+        const changes = changedNodeFields(node, nodeFormToPayload(values));
+        if (Object.keys(changes).length === 0) {
+            onClose();
+            return;
+        }
+
+        setSaving(true);
+        setFormError(null);
         try {
-            await api.delete(`/admin/nodes/${id}`);
-            fetchNodes();
+            const res = await api.put<Node>(`/admin/nodes/${node.id}`, changes);
+            toast.success(`Saved ${res.data.name}`);
+            onSaved(res.data);
         } catch (err) {
-            alert("Failed to delete node.");
+            setFormError(errorMessage(err, 'Could not save the node.'));
+            setSaving(false);
         }
     };
 
-    const handleEdit = (node: Node) => {
-        setEditingNode({ ...node });
-    };
-
-    const saveEdit = async () => {
-        if (!editingNode) return;
-        try {
-            await api.put(`/admin/nodes/${editingNode.id}`, editingNode);
-            setEditingNode(null);
-            fetchNodes();
-        } catch (err) {
-            alert("Failed to update node.");
-        }
-    };
-
-    if (loading) return <div className="p-12 text-center animate-pulse text-muted font-bold tracking-widest mt-20 uppercase">Loading Nodes...</div>;
+    const connectionChanged =
+        values.address.trim() !== (node.address ?? '') ||
+        values.internal_address.trim() !== (node.internal_address ?? '') ||
+        values.port.trim() !== String(node.port ?? '');
 
     return (
-        <div className="space-y-8 animation-enter">
-            <div className="flex items-center justify-between mb-2">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Active Infrastructure</h2>
-                    <p className="text-muted text-sm font-medium">Monitoring {nodes.length} compute nodes across your network.</p>
-                </div>
-                <button
-                    onClick={() => navigate('/admin/nodes/create')}
-                    className="flex items-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm hover:bg-primary/90 transition-all shadow-lg shadow-primary/20"
-                >
-                    <Plus size={18} />
-                    Add Node
-                </button>
+        <Modal
+            open
+            onClose={onClose}
+            title={`Edit ${node.name}`}
+            size="lg"
+            dismissible={!saving}
+            footer={
+                <>
+                    <Button variant="ghost" onClick={onClose} disabled={saving}>
+                        Cancel
+                    </Button>
+                    <Button variant="primary" type="submit" form={formId} loading={saving}>
+                        Save changes
+                    </Button>
+                </>
+            }
+        >
+            <form id={formId} onSubmit={submit} noValidate className="space-y-4">
+                {formError && <Alert tone="danger">{formError}</Alert>}
+                <NodeFormFields values={values} errors={errors} onChange={change} />
+                {connectionChanged && (
+                    <Alert tone="warning">
+                        The panel will use the new address and port straight away. Make sure the node's daemon can be reached there, or
+                        the node will show as offline.
+                    </Alert>
+                )}
+            </form>
+        </Modal>
+    );
+}
+
+export default function AdminNodesPage() {
+    const toast = useToast();
+    const confirm = useConfirm();
+    const [nodes, setNodes] = useState<Node[] | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [editing, setEditing] = useState<Node | null>(null);
+    const [busyId, setBusyId] = useState<number | null>(null);
+    const [newToken, setNewToken] = useState<{ name: string; token: string } | null>(null);
+
+    const load = async () => {
+        try {
+            const res = await api.get<Node[]>('/admin/nodes');
+            setNodes(Array.isArray(res.data) ? res.data : []);
+            setError(null);
+        } catch (err) {
+            setError(errorMessage(err, 'Could not load nodes.'));
+        }
+    };
+
+    usePolling(load, 15000);
+
+    const retry = () => {
+        setError(null);
+        void load();
+    };
+
+    const regenerateToken = async (node: Node) => {
+        const confirmed = await confirm({
+            title: `Regenerate the token for ${node.name}?`,
+            description: (
+                <>
+                    The current token stops working at once and the node goes offline. It stays offline until you put the new token in{' '}
+                    <span className="font-mono text-foreground">NODE_TOKEN</span> in the node's{' '}
+                    <span className="font-mono text-foreground">.env</span> file and restart its daemon. Servers that are running keep
+                    running, but cannot be managed from the panel until then.
+                </>
+            ),
+            confirmLabel: 'Regenerate token',
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        setBusyId(node.id);
+        try {
+            const res = await api.post<{ token: string }>(`/admin/nodes/${node.id}/token`);
+            setNewToken({ name: node.name, token: res.data.token });
+            setNodes((current) => current?.map((item) => (item.id === node.id ? { ...item, is_online: false } : item)) ?? current);
+        } catch (err) {
+            toast.error(errorMessage(err, 'Could not regenerate the token.'));
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const deleteNode = async (node: Node) => {
+        const confirmed = await confirm({
+            title: `Delete ${node.name}?`,
+            description:
+                'The node is removed from the panel and its token stops working. A node that still hosts servers cannot be deleted; delete those servers first.',
+            confirmLabel: 'Delete node',
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        setBusyId(node.id);
+        try {
+            await api.delete(`/admin/nodes/${node.id}`);
+            setNodes((current) => current?.filter((item) => item.id !== node.id) ?? current);
+            toast.success(`Deleted ${node.name}`);
+        } catch (err) {
+            toast.error(errorMessage(err, 'Could not delete the node.'));
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const header = (
+        <PageHeader
+            title="Nodes"
+            description="The machines that run your servers."
+            actions={
+                <Link to="/admin/nodes/create" className={primaryLink}>
+                    <Plus size={16} aria-hidden />
+                    Add node
+                </Link>
+            }
+        />
+    );
+
+    if (!nodes) {
+        return (
+            <>
+                {header}
+                {error ? (
+                    <Alert tone="danger" title="Could not load nodes" actions={<Button size="sm" onClick={retry}>Try again</Button>}>
+                        {error}
+                    </Alert>
+                ) : (
+                    <LoadingState label="Loading nodes…" />
+                )}
+            </>
+        );
+    }
+
+    return (
+        <>
+            {header}
+
+            <div className="space-y-4">
+                {error && (
+                    <Alert tone="warning" title="Could not refresh" actions={<Button size="sm" onClick={retry}>Try again</Button>}>
+                        {error} Showing the last list received.
+                    </Alert>
+                )}
+
+                <Card flush>
+                    {nodes.length === 0 ? (
+                        <EmptyState
+                            icon={<Waypoints size={18} aria-hidden />}
+                            title="No nodes yet"
+                            description="A node is a machine running the Atlas daemon. Add one before you create servers."
+                            action={
+                                <Link to="/admin/nodes/create" className="text-sm font-medium text-primary-text hover:underline">
+                                    Add your first node
+                                </Link>
+                            }
+                        />
+                    ) : (
+                        <Table className="min-w-[56rem]">
+                            <thead>
+                                <tr>
+                                    <Th>Node</Th>
+                                    <Th>Status</Th>
+                                    <Th>Address</Th>
+                                    <Th>Capacity</Th>
+                                    <Th className="w-56">Usage</Th>
+                                    <Th className="text-right">Actions</Th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {nodes.map((node) => (
+                                    <Tr key={node.id}>
+                                        <Td>
+                                            <div className="max-w-56 truncate font-medium text-foreground" title={node.name}>
+                                                {node.name}
+                                            </div>
+                                            <div className="max-w-56 truncate text-xs text-muted">
+                                                {node.location && node.location !== 'Unknown' ? node.location : 'No location set'}
+                                            </div>
+                                        </Td>
+                                        <Td>
+                                            <NodeStatusBadge online={node.is_online} />
+                                            <div className="mt-1 whitespace-nowrap text-xs text-muted" title={formatDateTime(node.last_heartbeat)}>
+                                                {formatRelative(node.last_heartbeat) === '—'
+                                                    ? 'No heartbeat yet'
+                                                    : `Heartbeat ${formatRelative(node.last_heartbeat)}`}
+                                            </div>
+                                        </Td>
+                                        <Td>
+                                            <div className="max-w-64 truncate font-mono text-xs text-foreground" title={`${node.address}:${node.port}`}>
+                                                {node.address}:{node.port}
+                                            </div>
+                                            <div className="mt-1 max-w-64 truncate text-xs text-muted">
+                                                {node.internal_address ? (
+                                                    <>
+                                                        Internal: <span className="font-mono">{node.internal_address}</span>
+                                                    </>
+                                                ) : (
+                                                    'Uses public address'
+                                                )}
+                                                <span className="tabular"> · SFTP {node.sftp_port}</span>
+                                            </div>
+                                        </Td>
+                                        <Td className="whitespace-nowrap text-xs text-muted">
+                                            <div>Memory: {node.total_ram > 0 ? formatMB(node.total_ram) : 'no limit'}</div>
+                                            <div className="mt-1">Disk: {node.total_disk > 0 ? formatMB(node.total_disk) : 'no limit'}</div>
+                                        </Td>
+                                        <Td>
+                                            <NodeUsage node={node} className="w-48 gap-2" />
+                                        </Td>
+                                        <Td>
+                                            <div className="flex items-center justify-end gap-1">
+                                                <IconButton
+                                                    label={`Edit ${node.name}`}
+                                                    size="sm"
+                                                    disabled={busyId === node.id}
+                                                    onClick={() => setEditing(node)}
+                                                >
+                                                    <Pencil size={16} aria-hidden />
+                                                </IconButton>
+                                                <IconButton
+                                                    label={`Regenerate token for ${node.name}`}
+                                                    size="sm"
+                                                    disabled={busyId === node.id}
+                                                    onClick={() => void regenerateToken(node)}
+                                                >
+                                                    <KeyRound size={16} aria-hidden />
+                                                </IconButton>
+                                                <IconButton
+                                                    label={`Delete ${node.name}`}
+                                                    size="sm"
+                                                    className="hover:bg-danger/10 hover:text-danger"
+                                                    loading={busyId === node.id}
+                                                    onClick={() => void deleteNode(node)}
+                                                >
+                                                    <Trash2 size={16} aria-hidden />
+                                                </IconButton>
+                                            </div>
+                                        </Td>
+                                    </Tr>
+                                ))}
+                            </tbody>
+                        </Table>
+                    )}
+                </Card>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {nodes.map((node) => (
-                    <div key={node.id} className="panel-card p-6 group relative border-border/50 hover:border-primary/30 transition-all">
-                        <div className="flex justify-between items-start mb-6">
-                            <div className="flex items-center gap-4">
-                                <div className={clsx(
-                                    "w-12 h-12 rounded-2xl flex items-center justify-center transition-colors shadow-inner",
-                                    node.is_online ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
-                                )}>
-                                    <Server size={24} />
-                                </div>
-                                <div>
-                                    <h3 className="font-bold text-lg leading-tight group-hover:text-primary transition-colors">{node.name}</h3>
-                                    <div className="flex items-center gap-1.5 text-xs text-muted font-medium mt-1">
-                                        <Globe size={12} /> {node.address}:{node.port}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className={clsx(
-                                "flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
-                                node.is_online ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
-                            )}>
-                                {node.is_online ? <CheckCircle size={10} /> : <XCircle size={10} />}
-                                {node.is_online ? 'Online' : 'Offline'}
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="bg-secondary/40 p-4 rounded-xl border border-border/30">
-                                <div className="flex items-center gap-2 text-muted text-[10px] font-bold uppercase tracking-widest mb-2">
-                                    <HardDrive size={12} className="text-purple-500" /> RAM
-                                </div>
-                                <span className="text-xl font-bold tracking-tight">{node.total_ram || 0} MB</span>
-                            </div>
-                            <div className="bg-secondary/40 p-4 rounded-xl border border-border/30">
-                                <div className="flex items-center gap-2 text-muted text-[10px] font-bold uppercase tracking-widest mb-2">
-                                    <Server size={12} className="text-blue-500" /> Disk
-                                </div>
-                                <span className="text-xl font-bold tracking-tight">{node.total_disk || 0} MB</span>
-                            </div>
-                        </div>
-
-                        <div className="mt-8 pt-4 border-t border-border/30 flex items-center justify-between">
-                            <div className="text-[10px] font-bold text-muted uppercase tracking-widest flex items-center gap-2">
-                                Last Heartbeat
-                                <span className="text-foreground">
-                                    {node.last_heartbeat ? formatDistanceToNow(new Date(node.last_heartbeat), { addSuffix: true }) : 'Never'}
-                                </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => handleEdit(node)}
-                                    className="p-2 hover:bg-primary/10 text-muted hover:text-primary rounded-lg transition-colors border border-transparent hover:border-primary/20"
-                                    title="Edit Node"
-                                >
-                                    <Settings size={16} />
-                                </button>
-                                <button
-                                    onClick={() => handleDelete(node.id)}
-                                    className="p-2 hover:bg-red-500/10 text-muted hover:text-red-500 rounded-lg transition-colors border border-transparent hover:border-red-500/20"
-                                    title="Delete Node"
-                                >
-                                    <Trash2 size={16} />
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                ))}
-
-                <button
-                    onClick={() => navigate('/admin/nodes/create')}
-                    className="panel-card p-8 flex flex-col items-center justify-center gap-4 border-dashed border-2 border-border/60 hover:border-primary/50 hover:bg-primary/[0.02] transition-all group min-h-[220px]"
-                >
-                    <div className="w-14 h-14 rounded-full bg-secondary group-hover:bg-primary group-hover:text-white transition-all flex items-center justify-center shadow-inner">
-                        <Plus size={32} />
-                    </div>
-                    <div className="text-center">
-                        <span className="block font-bold text-lg">Deploy New Node</span>
-                        <span className="text-xs text-muted font-medium mt-1">Add manual compute resources to your cluster</span>
-                    </div>
-                </button>
-            </div>
-
-            {/* Edit Modal */}
-            {editingNode && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-background border border-border/60 rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden scale-in">
-                        <div className="p-8 border-b border-border/50 flex items-center justify-between bg-secondary/20">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                                    <Settings size={20} />
-                                </div>
-                                <div>
-                                    <h3 className="font-bold text-xl">Modify Node</h3>
-                                    <p className="text-xs text-muted font-medium">Update infrastructure details for {editingNode.name}</p>
-                                </div>
-                            </div>
-                            <button onClick={() => setEditingNode(null)} className="p-2 hover:bg-secondary rounded-xl transition-colors">
-                                <X size={20} className="text-muted" />
-                            </button>
-                        </div>
-                        <div className="p-8 space-y-6">
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Node Name</label>
-                                    <input
-                                        className="input-field"
-                                        value={editingNode.name}
-                                        onChange={e => setEditingNode({ ...editingNode, name: e.target.value })}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Location</label>
-                                    <input
-                                        className="input-field"
-                                        value={editingNode.location || ''}
-                                        onChange={e => setEditingNode({ ...editingNode, location: e.target.value })}
-                                        placeholder="e.g. London, UK"
-                                    />
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Internal Address (optional)</label>
-                                <input
-                                    className="input-field"
-                                    placeholder="daemon"
-                                    value={editingNode.internal_address || ''}
-                                    onChange={e => setEditingNode({ ...editingNode, internal_address: e.target.value })}
-                                />
-                                <p className="text-xs text-muted pl-1">How the panel reaches this node&apos;s daemon. Use &quot;daemon&quot; for the node in the same Docker Compose stack; leave empty to use the public address.</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">IP Address / Domain</label>
-                                    <input
-                                        className="input-field"
-                                        value={editingNode.address}
-                                        onChange={e => setEditingNode({ ...editingNode, address: e.target.value })}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">API Port</label>
-                                    <input
-                                        className="input-field"
-                                        value={editingNode.port}
-                                        onChange={e => setEditingNode({ ...editingNode, port: e.target.value })}
-                                    />
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Total RAM (MB)</label>
-                                    <input
-                                        type="number"
-                                        className="input-field"
-                                        value={editingNode.total_ram || 0}
-                                        onChange={e => setEditingNode({ ...editingNode, total_ram: parseInt(e.target.value) })}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Total Disk (MB)</label>
-                                    <input
-                                        type="number"
-                                        className="input-field"
-                                        value={editingNode.total_disk || 0}
-                                        onChange={e => setEditingNode({ ...editingNode, total_disk: parseInt(e.target.value) })}
-                                    />
-                                </div>
-                            </div>
-                            <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/20 flex gap-3">
-                                <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={16} />
-                                <div className="text-[10px] text-amber-500/80 font-medium leading-relaxed">
-                                    If you change the address or port, ensure the node's daemon is correctly configured and reachable at the new location.
-                                </div>
-                            </div>
-                        </div>
-                        <div className="p-8 bg-secondary/10 flex items-center justify-end gap-3">
-                            <button
-                                onClick={() => setEditingNode(null)}
-                                className="px-6 py-2.5 rounded-xl font-bold text-sm text-muted hover:text-foreground transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={saveEdit}
-                                className="px-8 py-2.5 bg-primary text-white rounded-xl font-bold text-sm shadow-lg shadow-primary/20 hover:bg-primary/90 transition-all"
-                            >
-                                Save Changes
-                            </button>
-                        </div>
-                    </div>
-                </div>
+            {editing && (
+                <EditNodeModal
+                    key={editing.id}
+                    node={editing}
+                    onClose={() => setEditing(null)}
+                    onSaved={(saved) => {
+                        setNodes((current) => current?.map((item) => (item.id === saved.id ? saved : item)) ?? current);
+                        setEditing(null);
+                    }}
+                />
             )}
-        </div>
+
+            <Modal
+                open={Boolean(newToken)}
+                onClose={() => setNewToken(null)}
+                title={`New token for ${newToken?.name ?? 'node'}`}
+                description="Copy it now. It is shown only this once and cannot be shown again."
+                footer={
+                    <Button variant="primary" onClick={() => setNewToken(null)}>
+                        I have saved the token
+                    </Button>
+                }
+            >
+                {newToken && (
+                    <div className="space-y-4">
+                        <NodeToken token={newToken.token} />
+                        <NodeTokenSteps lastStep="The node shows Online again within a few seconds. Until then it stays offline." />
+                    </div>
+                )}
+            </Modal>
+        </>
     );
 }

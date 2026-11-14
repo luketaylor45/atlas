@@ -1,9 +1,11 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import api from '../lib/api';
 import {
     AUTH_SESSION_EXPIRED_EVENT,
     clearStoredAuth,
     getStoredAuth,
     storeAuth,
+    updateStoredUser,
 } from '../lib/authSession';
 import { AuthContext, type User } from './auth';
 
@@ -28,34 +30,65 @@ interface AuthState {
     token: string | null;
 }
 
+const signedOut: AuthState = { user: null, token: null };
+
 function readStoredAuth(): AuthState {
     const storedAuth = getStoredAuth();
     if (!storedAuth) {
         clearStoredAuth();
-        return { user: null, token: null };
+        return signedOut;
     }
 
     try {
         const expiry = getTokenExpiry(storedAuth.token);
         if (expiry !== null && expiry <= Date.now()) {
             clearStoredAuth();
-            return { user: null, token: null };
+            return signedOut;
         }
         return { user: JSON.parse(storedAuth.user), token: storedAuth.token };
     } catch {
         clearStoredAuth();
-        return { user: null, token: null };
+        return signedOut;
     }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [auth, setAuth] = useState<AuthState>(readStoredAuth);
+    // A stored session is only trusted once the server has confirmed it. A
+    // token handed over by a fresh login is already confirmed.
+    const [verifiedToken, setVerifiedToken] = useState<string | null>(null);
     const { user, token } = auth;
+    const verifying = token !== null && verifiedToken !== token;
+
+    // Confirm the stored session with the server. What was saved at login can
+    // be out of date: the account may have been deleted, renamed, or had its
+    // admin role changed since.
+    useEffect(() => {
+        if (!token || verifiedToken === token) return;
+
+        let cancelled = false;
+        api.get<{ user: User }>('/auth/me')
+            .then((res) => {
+                if (cancelled) return;
+                setAuth((current) => (current.token === token ? { token, user: res.data.user } : current));
+                updateStoredUser(JSON.stringify(res.data.user));
+            })
+            .catch(() => {
+                // A 401 already cleared the session through the API layer.
+                // Any other failure (server briefly unreachable) keeps the
+                // stored session so a blip does not sign everyone out.
+            })
+            .finally(() => {
+                if (!cancelled) setVerifiedToken(token);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [token, verifiedToken]);
 
     useEffect(() => {
-        const clearAuthState = () => {
-            setAuth({ user: null, token: null });
-        };
+        const clearAuthState = () => setAuth(signedOut);
         const handleStorage = (event: StorageEvent) => {
             if ((event.key === 'token' || event.key === 'user') && event.newValue === null) {
                 if (!getStoredAuth()) {
@@ -80,25 +113,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const expire = () => {
             clearStoredAuth();
-            setAuth({ user: null, token: null });
+            setAuth(signedOut);
         };
         const remaining = expiry - Date.now();
+        // setTimeout overflows above ~24.8 days; sessions are far shorter.
         const timer = window.setTimeout(expire, Math.max(remaining, 0));
         return () => window.clearTimeout(timer);
     }, [token]);
 
-    const login = (newToken: string, newUser: User, remember = true) => {
+    const login = useCallback((newToken: string, newUser: User, remember = true) => {
         storeAuth(newToken, JSON.stringify(newUser), remember);
+        setVerifiedToken(newToken);
         setAuth({ token: newToken, user: newUser });
-    };
+    }, []);
 
-    const logout = () => {
+    const logout = useCallback(() => {
         clearStoredAuth();
-        setAuth({ user: null, token: null });
-    };
+        setAuth(signedOut);
+    }, []);
 
     return (
-        <AuthContext.Provider value={{ user, token, loading: false, login, logout }}>
+        <AuthContext.Provider value={{ user, token, loading: verifying, login, logout }}>
             {children}
         </AuthContext.Provider>
     );

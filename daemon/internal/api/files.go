@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/daemon/internal/config"
@@ -22,6 +23,8 @@ type FileInfo struct {
 	Size  int64  `json:"size"`
 	IsDir bool   `json:"is_dir"`
 	Mime  string `json:"mime"`
+	// Modified is the last modification time in RFC 3339, empty if unknown.
+	Modified string `json:"modified"`
 }
 
 const (
@@ -282,13 +285,14 @@ func ListFiles(c *gin.Context) {
 
 	files := make([]FileInfo, 0, len(entries))
 	for _, entry := range entries {
-		info, _ := entry.Info()
-		files = append(files, FileInfo{
-			Name:  entry.Name(),
-			Size:  info.Size(),
-			IsDir: entry.IsDir(),
-			Mime:  "", // Optional: could detect mime here
-		})
+		file := FileInfo{Name: entry.Name(), IsDir: entry.IsDir()}
+		// A file can vanish between listing and stat; it is still listed,
+		// just without its size and time.
+		if info, err := entry.Info(); err == nil {
+			file.Size = info.Size()
+			file.Modified = info.ModTime().UTC().Format(time.RFC3339)
+		}
+		files = append(files, file)
 	}
 
 	// Sort: Directories first, then alphabetical

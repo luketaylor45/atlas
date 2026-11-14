@@ -1,540 +1,691 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Check, Egg as EggIcon, Lock } from 'lucide-react';
 import api from '../../lib/api';
+import { cn } from '../../lib/cn';
+import { errorMessage, errorStatus } from '../../lib/errors';
+import { formatCpu, formatMB } from '../../lib/format';
+import { eggImages, eggPorts, type Egg, type Nest, type Node, type Service, type User } from '../../lib/types';
 import {
-    Check, ChevronRight,
-    Server, Activity,
-    Globe,
-    AlertTriangle
-} from 'lucide-react';
-import clsx from 'clsx';
+    Alert,
+    Button,
+    Card,
+    CardHeader,
+    EmptyState,
+    Field,
+    Input,
+    LoadingState,
+    PageHeader,
+    Select,
+    useToast,
+} from '../../components/ui';
+import { groupNests, nestEggs } from './shared/NestGroups';
+import { portInMessage, portNumber, primaryLinkClass, wholeNumber } from './shared/ServiceForm';
 
-interface EggPort {
-    name?: string;
-    env: string;
-    default?: number;
-    protocol?: string;
+interface Options {
+    nodes: Node[];
+    nests: Nest[];
+    users: User[];
 }
 
-// Additional ports an egg needs besides the primary one (query, RCON, ...).
-const eggPortList = (egg: { ports?: string } | null): EggPort[] => {
-    if (!egg?.ports) return [];
-    try {
-        const parsed = JSON.parse(egg.ports);
-        return Array.isArray(parsed) ? parsed.filter((item): item is EggPort => Boolean(item?.env)) : [];
-    } catch {
-        return [];
-    }
-};
+/** A titled set of eggs in the game picker. */
+interface EggSection {
+    key: string;
+    title: string;
+    eggs: Egg[];
+}
+
+const extraKey = (env: string) => `extra:${env}`;
+
+function protocolLabel(protocol: string | undefined): string {
+    const value = (protocol ?? '').trim().toLowerCase();
+    if (value === 'tcp') return 'TCP';
+    if (value === 'udp') return 'UDP';
+    return 'TCP and UDP';
+}
 
 export default function CreateServicePage() {
     const navigate = useNavigate();
-    const [step, setStep] = useState(1);
-    const [loading, setLoading] = useState(false);
+    const toast = useToast();
 
-    // Data lists
-    const [nodes, setNodes] = useState<any[]>([]);
-    const [nests, setNests] = useState<any[]>([]);
-    const [users, setUsers] = useState<any[]>([]);
+    const [options, setOptions] = useState<Options | null>(null);
+    const [loadError, setLoadError] = useState('');
 
-    // Selections
-    const [selectedNest, setSelectedNest] = useState<any>(null);
-    const [selectedEgg, setSelectedEgg] = useState<any>(null);
-    const [selectedNode, setSelectedNode] = useState<any>(null);
-    const [selectedUser, setSelectedUser] = useState<any>(null);
+    const [eggId, setEggId] = useState<number | null>(null);
+    const [eggSearch, setEggSearch] = useState('');
     const [name, setName] = useState('');
-    const [ram, setRam] = useState(1024);
-    const [cpu, setCpu] = useState(100);
-    const [disk, setDisk] = useState(5120);
-    const [port, setPort] = useState(25565);
-    const [eggVars, setEggVars] = useState<Record<string, string>>({});
-    const [selectedImage, setSelectedImage] = useState('');
+    const [userId, setUserId] = useState('');
+    const [nodeId, setNodeId] = useState('');
+    const [memory, setMemory] = useState('1024');
+    const [cpu, setCpu] = useState('100');
+    const [disk, setDisk] = useState('5120');
+    const [image, setImage] = useState('');
+    const [port, setPort] = useState('');
     const [extraPorts, setExtraPorts] = useState<Record<string, string>>({});
+    const [variables, setVariables] = useState<Record<string, string>>({});
+
+    const [errors, setErrors] = useState<Record<string, string>>({});
+    const [formError, setFormError] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    const [attempt, setAttempt] = useState(0);
 
     useEffect(() => {
-        const fetchData = async () => {
-            const [nRes, nestsRes, uRes] = await Promise.all([
-                api.get('/admin/nodes'),
-                api.get('/admin/nests'),
-                api.get('/admin/users')
-            ]);
-            setNodes(nRes.data);
-            setNests(nestsRes.data);
-            setUsers(uRes.data);
-        };
-        fetchData();
-    }, []);
-
-    useEffect(() => {
-        if (selectedEgg) {
-            const defaults: Record<string, string> = {};
-            selectedEgg.variables?.forEach((v: any) => {
-                defaults[v.environment_variable] = v.default_value;
+        let cancelled = false;
+        Promise.all([
+            api.get<Node[] | null>('/admin/nodes'),
+            api.get<Nest[] | null>('/admin/nests'),
+            api.get<User[] | null>('/admin/users'),
+        ])
+            .then(([nodes, nests, users]) => {
+                if (cancelled) return;
+                const loaded: Options = {
+                    nodes: Array.isArray(nodes.data) ? nodes.data : [],
+                    nests: Array.isArray(nests.data) ? nests.data : [],
+                    users: Array.isArray(users.data) ? users.data : [],
+                };
+                setOptions(loaded);
+                setLoadError('');
+                // With a single node there is nothing to choose.
+                if (loaded.nodes.length === 1) setNodeId((current) => current || String(loaded.nodes[0].id));
+            })
+            .catch((err: unknown) => {
+                if (!cancelled) setLoadError(errorMessage(err, 'Could not load the nodes, eggs and users.'));
             });
-            setEggVars(defaults);
-            setExtraPorts({});
+        return () => {
+            cancelled = true;
+        };
+    }, [attempt]);
 
-            // Set default image
-            try {
-                const images = JSON.parse(selectedEgg.docker_images);
-                if (images.length > 0) setSelectedImage(images[0]);
-            } catch (e) {
-                setSelectedImage('');
+    const sections = useMemo<EggSection[]>(() => {
+        const result: EggSection[] = [];
+        for (const group of groupNests(options?.nests ?? [])) {
+            // Eggs can sit directly in a root nest as well as in its sub-nests.
+            const direct = nestEggs(group.root);
+            if (direct.length > 0) result.push({ key: `nest-${group.root.id}`, title: group.root.name, eggs: direct });
+            for (const child of group.children) {
+                const eggs = nestEggs(child);
+                if (eggs.length > 0) {
+                    result.push({ key: `nest-${child.id}`, title: `${group.root.name} / ${child.name}`, eggs });
+                }
             }
         }
-    }, [selectedEgg]);
+        return result;
+    }, [options]);
 
-    const handleCreate = async () => {
-        setLoading(true);
-        try {
-            await api.post('/admin/services', {
-                name,
-                node_id: selectedNode.id,
-                egg_id: selectedEgg.id,
-                user_id: selectedUser.id,
-                memory: ram,
-                cpu: cpu,
-                disk: disk,
-                port: port,
-                // Ports left blank are assigned automatically by the panel.
-                extra_ports: Object.fromEntries(
-                    Object.entries(extraPorts)
-                        .map(([env, value]) => [env, parseInt(value, 10)] as const)
-                        .filter(([, value]) => Number.isInteger(value) && value > 0)
+    const allEggs = useMemo(() => sections.flatMap((section) => section.eggs), [sections]);
+    const egg = allEggs.find((item) => item.id === eggId) ?? null;
+    const images = eggImages(egg);
+    const ports = eggPorts(egg);
+    const eggVariables = egg?.variables ?? [];
+    const node = options?.nodes.find((item) => String(item.id) === nodeId) ?? null;
+
+    const visibleSections = useMemo(() => {
+        const term = eggSearch.trim().toLowerCase();
+        if (!term) return sections;
+        return sections
+            .map((section) => ({
+                ...section,
+                eggs: section.eggs.filter(
+                    (item) => item.name.toLowerCase().includes(term) || section.title.toLowerCase().includes(term),
                 ),
-                environment: JSON.stringify(eggVars),
-                docker_image: selectedImage
+            }))
+            .filter((section) => section.eggs.length > 0);
+    }, [sections, eggSearch]);
+
+    const clearError = (key: string) => {
+        setErrors((current) => {
+            if (!(key in current)) return current;
+            const next = { ...current };
+            delete next[key];
+            return next;
+        });
+    };
+
+    const chooseEgg = (chosen: Egg) => {
+        if (chosen.id === eggId) return;
+        setEggId(chosen.id);
+        setImage(eggImages(chosen)[0] ?? '');
+        setExtraPorts({});
+        // Every variable starts at its default, including empty ones.
+        setVariables(Object.fromEntries((chosen.variables ?? []).map((variable) => [variable.environment_variable, variable.default_value ?? ''])));
+        clearError('egg');
+    };
+
+    const retry = () => {
+        setLoadError('');
+        setAttempt((current) => current + 1);
+    };
+
+    const focusFirstInvalid = () => {
+        requestAnimationFrame(() => {
+            const target = document.querySelector<HTMLElement>('form [aria-invalid="true"], form [data-invalid="true"]');
+            target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            target?.focus({ preventScroll: true });
+        });
+    };
+
+    const submit = async (event: FormEvent) => {
+        event.preventDefault();
+        if (submitting) return;
+
+        const next: Record<string, string> = {};
+        const trimmedName = name.trim();
+        const ownerValue = wholeNumber(userId);
+        const nodeValue = wholeNumber(nodeId);
+        const memoryValue = wholeNumber(memory);
+        const cpuValue = wholeNumber(cpu);
+        const diskValue = wholeNumber(disk);
+        const portValue = portNumber(port);
+
+        if (!egg) next.egg = 'Choose the game this server runs.';
+        if (!trimmedName) next.name = 'Enter a name for the server.';
+        if (ownerValue === null) next.owner = 'Choose who owns the server.';
+        if (nodeValue === null) next.node = 'Choose the node the server runs on.';
+        if (memoryValue === null || memoryValue < 1) next.memory = 'Enter the memory limit in MB, as a whole number above zero.';
+        if (cpuValue === null || cpuValue < 1) next.cpu = 'Enter the CPU limit as a percentage above zero.';
+        if (diskValue === null) next.disk = 'Enter the disk limit in MB, as a whole number.';
+        if (portValue === null) next.port = 'Enter a port between 1 and 65535.';
+
+        // Extra ports are optional, but the ones given must be valid and all different.
+        const extra: Record<string, number> = {};
+        const taken = new Set<number>(portValue === null ? [] : [portValue]);
+        for (const item of ports) {
+            const raw = (extraPorts[item.env] ?? '').trim();
+            if (!raw) continue;
+            const value = portNumber(raw);
+            if (value === null) {
+                next[extraKey(item.env)] = 'Enter a port between 1 and 65535, or leave it empty.';
+            } else if (taken.has(value)) {
+                next[extraKey(item.env)] = `Port ${value} is already used above. Every port must be different.`;
+            } else {
+                taken.add(value);
+                extra[item.env] = value;
+            }
+        }
+
+        setErrors(next);
+        setFormError('');
+        if (
+            Object.keys(next).length > 0 ||
+            !egg ||
+            ownerValue === null ||
+            nodeValue === null ||
+            memoryValue === null ||
+            cpuValue === null ||
+            diskValue === null ||
+            portValue === null
+        ) {
+            toast.error('Some details are missing or not valid. Check the highlighted fields.');
+            focusFirstInvalid();
+            return;
+        }
+
+        const environment: Record<string, string> = {};
+        for (const variable of eggVariables) {
+            environment[variable.environment_variable] = variables[variable.environment_variable] ?? variable.default_value ?? '';
+        }
+
+        setSubmitting(true);
+        try {
+            const res = await api.post<Service>('/admin/services', {
+                name: trimmedName,
+                node_id: nodeValue,
+                egg_id: egg.id,
+                user_id: ownerValue,
+                memory: memoryValue,
+                disk: diskValue,
+                cpu: cpuValue,
+                port: portValue,
+                environment: JSON.stringify(environment),
+                docker_image: image,
+                extra_ports: extra,
             });
-            navigate('/admin/services');
-        } catch (err: any) {
-            console.error(err);
-            const errorMsg = err.response?.data?.error || "Failed to create service. Please check daemon logs.";
-            alert(`Error: ${errorMsg}`);
-        } finally {
-            setLoading(false);
+            toast.success(`${trimmedName} was created and is now installing.`);
+            navigate(res.data?.uuid ? `/services/${res.data.uuid}` : '/admin/services');
+        } catch (err) {
+            const message = errorMessage(err, 'Could not create the server.');
+            if (errorStatus(err) === 409) {
+                // Put a "port taken" answer on the port it is about.
+                const conflicting = portInMessage(message);
+                const env = Object.keys(extra).find((key) => extra[key] === conflicting);
+                setErrors({ [env ? extraKey(env) : 'port']: message });
+                focusFirstInvalid();
+            } else {
+                setFormError(message);
+            }
+            setSubmitting(false);
         }
     };
 
+    const header = (
+        <PageHeader
+            title="Create server"
+            description="Choose a game, who owns the server and where it runs. It starts installing as soon as it is created."
+            eyebrow={
+                <Link to="/admin/services" className="inline-flex items-center gap-1.5 hover:text-foreground">
+                    <ArrowLeft size={16} aria-hidden />
+                    All servers
+                </Link>
+            }
+        />
+    );
+
+    if (!options) {
+        return (
+            <>
+                {header}
+                {loadError ? (
+                    <Alert
+                        tone="danger"
+                        title="This page could not be loaded"
+                        actions={
+                            <Button size="sm" variant="outline" onClick={retry}>
+                                Try again
+                            </Button>
+                        }
+                    >
+                        {loadError}
+                    </Alert>
+                ) : (
+                    <LoadingState label="Loading nodes, eggs and users…" />
+                )}
+            </>
+        );
+    }
+
+    if (allEggs.length === 0) {
+        return (
+            <>
+                {header}
+                <Card flush>
+                    <EmptyState
+                        icon={<EggIcon size={18} aria-hidden />}
+                        title="There are no eggs yet"
+                        description="An egg describes how to install and run a game. Import one before creating a server."
+                        action={
+                            <Link to="/admin/eggs/import" className={primaryLinkClass}>
+                                Import an egg
+                            </Link>
+                        }
+                    />
+                </Card>
+            </>
+        );
+    }
+
+    if (options.nodes.length === 0) {
+        return (
+            <>
+                {header}
+                <Card flush>
+                    <EmptyState
+                        title="There are no nodes yet"
+                        description="A node is the machine that runs servers. Add one before creating a server."
+                        action={
+                            <Link to="/admin/nodes/create" className={primaryLinkClass}>
+                                Add a node
+                            </Link>
+                        }
+                    />
+                </Card>
+            </>
+        );
+    }
 
     return (
-        <div className="max-w-6xl mx-auto space-y-12 pb-20 animation-enter">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-4xl font-bold tracking-tight">Create Service</h1>
-                    <p className="text-muted text-lg mt-2">Provision a new service instance on your infrastructure.</p>
-                </div>
-                <div className="flex items-center gap-3">
-                    {[1, 2, 3].map(i => (
-                        <div key={i} className="flex items-center gap-3">
-                            <div className={clsx(
-                                "w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm transition-all shadow-sm",
-                                step === i ? "bg-primary text-white shadow-primary/20 scale-110" :
-                                    step > i ? "bg-emerald-500 text-white shadow-emerald-500/20" : "bg-secondary text-muted"
-                            )}>
-                                {step > i ? <Check size={18} /> : i}
-                            </div>
-                            {i < 3 && <div className={clsx("w-8 h-0.5 rounded-full transition-colors", step > i ? "bg-emerald-500" : "bg-border")} />}
-                        </div>
-                    ))}
-                </div>
-            </div>
+        <>
+            {header}
 
-            {/* Step 1: Template Selection */}
-            {step === 1 && (
-                <div className="space-y-12">
-                    <div className="text-center space-y-4 max-w-2xl mx-auto">
-                        <h2 className="text-3xl font-bold">Select a Service Type</h2>
-                        <p className="text-muted font-medium">Choose the platform or game you want to deploy. You'll be able to select the specific version next.</p>
-                    </div>
+            <form onSubmit={submit} className="space-y-6" noValidate>
+                {/* 1. Game */}
+                <Card>
+                    <CardHeader
+                        title="Game"
+                        description={egg ? `${egg.name} is selected.` : 'The egg decides how the server is installed and started.'}
+                    />
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                        {nests.filter(n => !n.parent_id).map(category => (
-                            <div
-                                key={category.id}
-                                onClick={() => {
-                                    setSelectedNest(category);
-                                    setSelectedEgg(null); // Clear egg when switching categories
-                                }}
-                                className={clsx(
-                                    "panel-card p-8 cursor-pointer transition-all border-2 flex flex-col gap-6 items-center text-center group",
-                                    selectedNest?.id === category.id ? "border-primary bg-primary/5 shadow-xl scale-[1.03]" : "border-border/40 hover:border-primary/40 hover:-translate-y-1"
-                                )}
-                            >
-                                <div className={clsx(
-                                    "w-20 h-20 rounded-3xl flex items-center justify-center transition-colors shadow-lg",
-                                    selectedNest?.id === category.id ? "bg-primary text-white" : "bg-secondary text-muted group-hover:bg-primary/10 group-hover:text-primary"
-                                )}>
-                                    <Globe size={40} />
-                                </div>
-                                <div>
-                                    <h4 className="font-bold text-2xl mb-2">{category.name}</h4>
-                                    <p className="text-sm text-muted font-medium line-clamp-2">{category.description}</p>
-                                </div>
-
-                                {selectedNest?.id === category.id && (
-                                    <div className="absolute top-4 right-4">
-                                        <div className="bg-primary text-white p-1 rounded-full"><Check size={16} /></div>
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* Show Sub-Nests (Games) when category selected */}
-                    {selectedNest && selectedNest.sub_nests && selectedNest.sub_nests.length > 0 && (
-                        <div className="space-y-6 max-w-5xl mx-auto animation-enter">
-                            <div className="flex items-center gap-3">
-                                <div className="h-px bg-border flex-1" />
-                                <span className="text-xs font-bold uppercase tracking-widest text-muted">Select Game from {selectedNest.name}</span>
-                                <div className="h-px bg-border flex-1" />
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                {selectedNest.sub_nests?.map((game: any) => {
-                                    const isGameActive = selectedEgg && game.eggs?.some((e: any) => e.id === selectedEgg.id);
-                                    return (
-                                        <div
-                                            key={game.id}
-                                            onClick={() => {
-                                                if (game.eggs && game.eggs.length > 0) {
-                                                    // Only auto-select first egg if one isn't already selected from this game
-                                                    if (!isGameActive) {
-                                                        setSelectedEgg(game.eggs[0]);
-                                                    }
-                                                }
-                                            }}
-                                            className={clsx(
-                                                "panel-card p-6 cursor-pointer transition-all border-2 flex flex-col gap-4 items-center text-center",
-                                                isGameActive ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "border-border/40 hover:border-primary/20"
-                                            )}
-                                        >
-                                            <div className={clsx(
-                                                "w-16 h-16 rounded-2xl flex items-center justify-center transition-colors",
-                                                isGameActive ? "bg-primary text-white" : "bg-secondary text-muted"
-                                            )}>
-                                                <Server size={32} />
-                                            </div>
-                                            <div>
-                                                <h5 className="font-bold text-lg">{game.name}</h5>
-                                                <p className="text-[10px] text-muted font-medium mt-1">{game.description || 'Service grouping container.'}</p>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
+                    {allEggs.length > 6 && (
+                        <Field label="Find a game" className="mb-5 max-w-sm">
+                            {(field) => (
+                                <Input
+                                    {...field}
+                                    type="search"
+                                    placeholder="Search by game or nest"
+                                    value={eggSearch}
+                                    onChange={(event) => setEggSearch(event.target.value)}
+                                />
+                            )}
+                        </Field>
                     )}
 
-                    {/* Show Egg Versions when a game is selected */}
-                    {selectedEgg && (() => {
-                        // Find which game this egg belongs to
-                        const parentGame = selectedNest?.sub_nests?.find((g: any) =>
-                            g.eggs?.some((e: any) => e.id === selectedEgg.id)
-                        );
+                    {errors.egg && (
+                        <p role="alert" className="mb-4 text-sm text-danger">
+                            {errors.egg}
+                        </p>
+                    )}
 
-                        if (!parentGame || !parentGame.eggs || parentGame.eggs.length === 0) return null;
-
-                        return (
-                            <div className="space-y-6 max-w-4xl mx-auto animation-enter">
-                                <div className="flex items-center gap-3">
-                                    <div className="h-px bg-border flex-1" />
-                                    <span className="text-xs font-bold uppercase tracking-widest text-muted">Select version of {parentGame.name}</span>
-                                    <div className="h-px bg-border flex-1" />
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {parentGame.eggs.map((egg: any) => (
-                                        <div
-                                            key={egg.id}
-                                            onClick={() => setSelectedEgg(egg)}
-                                            className={clsx(
-                                                "panel-card p-5 cursor-pointer transition-all border-2 flex justify-between items-center",
-                                                selectedEgg?.id === egg.id ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border/40 hover:border-primary/20"
-                                            )}
-                                        >
-                                            <div>
-                                                <h5 className="font-bold">{egg.name}</h5>
-                                                <p className="text-[11px] text-muted font-medium mt-1">{egg.description}</p>
-                                            </div>
-                                            <div className={clsx(
-                                                "w-6 h-6 rounded-full border-2 flex items-center justify-center",
-                                                selectedEgg?.id === egg.id ? "bg-primary border-primary" : "border-border"
-                                            )}>
-                                                {selectedEgg?.id === egg.id && <Check size={14} className="text-white" />}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        );
-                    })()}
-
-                    <div className="flex justify-end pt-8">
-                        <button
-                            disabled={!selectedEgg}
-                            onClick={() => setStep(2)}
-                            className="bg-primary px-10 py-3.5 rounded-2xl text-white font-bold flex items-center gap-3 enabled:hover:bg-primary/90 transition-all shadow-xl shadow-primary/20 disabled:opacity-50"
-                        >
-                            Next Step: Identification
-                            <ChevronRight size={20} />
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Step 2: Configuration & Allocation */}
-            {step === 2 && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-12 items-start">
-                    <div className="lg:col-span-2 space-y-10">
-                        {/* Basic Info */}
-                        <div className="panel-card p-8 border-border/60">
-                            <h3 className="text-xl font-bold mb-8 flex items-center gap-3"><Globe className="text-primary" /> Service Identity</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                <div className="space-y-3">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest">Service Name</label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. Minecraft Server #1"
-                                        className="input-field !text-base"
-                                        value={name}
-                                        onChange={(e) => setName(e.target.value)}
-                                    />
-                                </div>
-                                <div className="space-y-3">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest">Owner User</label>
-                                    <select
-                                        className="input-field !text-base appearance-none"
-                                        onChange={(e) => setSelectedUser(users.find(u => u.id === parseInt(e.target.value)))}
-                                        value={selectedUser?.id || ""}
-                                    >
-                                        <option value="">Select an owner account...</option>
-                                        {users.map(u => (
-                                            <option key={u.id} value={u.id}>{u.email} ({u.username})</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Node Selection */}
-                        <div className="panel-card p-8 border-border/60">
-                            <h3 className="text-xl font-bold mb-8 flex items-center gap-3"><Server className="text-primary" /> Hosting Node</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {nodes.map(node => (
-                                    <div
-                                        key={node.id}
-                                        onClick={() => setSelectedNode(node)}
-                                        className={clsx(
-                                            "p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between",
-                                            selectedNode?.id === node.id ? "border-primary bg-primary/5" : "border-border/40 hover:border-primary/20"
-                                        )}
-                                    >
-                                        <div className="flex items-center gap-4">
-                                            <div className={clsx("w-10 h-10 rounded-xl flex items-center justify-center", node.is_online ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500")}>
-                                                <Server size={20} />
-                                            </div>
-                                            <div>
-                                                <div className="font-bold text-sm">{node.name}</div>
-                                                <div className="text-[10px] text-muted font-bold uppercase tracking-wider">{node.address}</div>
-                                                <div className="text-[9px] text-muted font-medium mt-1">
-                                                    RAM: {node.total_ram || 0} MB | Disk: {node.total_disk || 0} MB
-                                                </div>
-                                            </div>
-                                        </div>
-                                        {selectedNode?.id === node.id && <Check className="text-primary" size={20} />}
+                    {visibleSections.length === 0 ? (
+                        <p className="text-sm text-muted">No game matches “{eggSearch.trim()}”.</p>
+                    ) : (
+                        <div role="radiogroup" aria-label="Game" className="space-y-5">
+                            {visibleSections.map((section) => (
+                                <div key={section.key}>
+                                    <h3 className="mb-2 text-sm font-medium text-muted">{section.title}</h3>
+                                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                        {section.eggs.map((item) => {
+                                            const selected = item.id === eggId;
+                                            return (
+                                                <button
+                                                    key={item.id}
+                                                    type="button"
+                                                    role="radio"
+                                                    aria-checked={selected}
+                                                    data-invalid={errors.egg ? true : undefined}
+                                                    onClick={() => chooseEgg(item)}
+                                                    className={cn(
+                                                        'flex min-w-0 items-start gap-3 rounded-control border p-3 text-left transition-colors',
+                                                        selected
+                                                            ? 'border-primary bg-primary/10 ring-1 ring-primary'
+                                                            : 'border-border hover:border-border-strong hover:bg-secondary',
+                                                    )}
+                                                >
+                                                    <span
+                                                        className={cn(
+                                                            'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
+                                                            selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong',
+                                                        )}
+                                                        aria-hidden
+                                                    >
+                                                        {selected && <Check size={12} strokeWidth={3} />}
+                                                    </span>
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate text-sm font-medium text-foreground">{item.name}</span>
+                                                        <span className="mt-0.5 line-clamp-2 block text-xs text-muted">
+                                                            {item.description || 'No description.'}
+                                                        </span>
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
                                     </div>
-                                ))}
-                            </div>
+                                </div>
+                            ))}
                         </div>
+                    )}
+                </Card>
 
-                        {/* Image Selection */}
-                        <div className="panel-card p-8 border-border/60">
-                            <h3 className="text-xl font-bold mb-8 flex items-center gap-3"><Activity className="text-primary" /> Container Image</h3>
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest">Select Runtime Version</label>
-                                <select
-                                    className="input-field !text-base"
-                                    value={selectedImage}
-                                    onChange={(e) => setSelectedImage(e.target.value)}
+                {/* 2. Details */}
+                <Card>
+                    <CardHeader title="Details" description="What the server is called, who owns it and which node runs it." />
+                    <div className="grid gap-4 md:grid-cols-3">
+                        <Field label="Server name" error={errors.name}>
+                            {(field) => (
+                                <Input
+                                    {...field}
+                                    value={name}
+                                    maxLength={255}
+                                    placeholder="Survival world"
+                                    onChange={(event) => {
+                                        setName(event.target.value);
+                                        clearError('name');
+                                    }}
+                                />
+                            )}
+                        </Field>
+                        <Field label="Owner" hint="The owner can manage the server and invite others." error={errors.owner}>
+                            {(field) => (
+                                <Select
+                                    {...field}
+                                    value={userId}
+                                    onChange={(event) => {
+                                        setUserId(event.target.value);
+                                        clearError('owner');
+                                    }}
                                 >
-                                    {(() => {
-                                        try {
-                                            const images = JSON.parse(selectedEgg.docker_images);
-                                            return images.map((img: string) => (
-                                                <option key={img} value={img}>{img}</option>
-                                            ));
-                                        } catch (e) {
-                                            return <option value={selectedImage}>{selectedImage}</option>;
-                                        }
-                                    })()}
-                                </select>
-                                <p className="text-[10px] text-muted font-medium">This image will be used to run your service container.</p>
-                            </div>
-                        </div>
+                                    <option value="">Choose an owner</option>
+                                    {options.users.map((user: User) => (
+                                        <option key={user.id} value={user.id}>
+                                            {user.username}
+                                            {user.is_admin ? ' (administrator)' : ''}
+                                        </option>
+                                    ))}
+                                </Select>
+                            )}
+                        </Field>
+                        <Field
+                            label="Node"
+                            error={errors.node}
+                            hint={
+                                node && !node.is_online ? (
+                                    <span className="text-warning">
+                                        This node is offline. The server cannot be created until the node is back online.
+                                    </span>
+                                ) : node && node.total_ram > 0 ? (
+                                    `${formatMB(node.total_ram)} memory and ${formatMB(node.total_disk)} disk in total.`
+                                ) : undefined
+                            }
+                        >
+                            {(field) => (
+                                <Select
+                                    {...field}
+                                    value={nodeId}
+                                    onChange={(event) => {
+                                        setNodeId(event.target.value);
+                                        clearError('node');
+                                    }}
+                                >
+                                    <option value="">Choose a node</option>
+                                    {options.nodes.map((item) => (
+                                        <option key={item.id} value={item.id}>
+                                            {item.name} — {item.is_online ? 'online' : 'offline'}
+                                        </option>
+                                    ))}
+                                </Select>
+                            )}
+                        </Field>
+                    </div>
+                </Card>
 
-                        {/* Resource Allocation & Variables */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            <div className="panel-card p-8 border-border/60 h-fit">
-                                <h3 className="text-xl font-bold mb-8 flex items-center gap-3"><Activity className="text-primary" /> Resource Allocation</h3>
-                                <div className="space-y-8">
-                                    <div className="space-y-3">
-                                        <div className="flex justify-between items-end">
-                                            <label className="text-[10px] font-bold text-muted uppercase tracking-widest leading-none">Memory Usage (MB)</label>
-                                            <span className="text-sm font-bold text-primary">{ram / 1024} GB</span>
-                                        </div>
-                                        <input
-                                            type="range"
-                                            min="512"
-                                            max="32768"
-                                            step="512"
-                                            value={ram}
-                                            onChange={(e) => setRam(parseInt(e.target.value))}
-                                            className="w-full accent-primary h-1.5 bg-secondary rounded-full appearance-none transition-all"
-                                        />
-                                    </div>
-                                    <div className="space-y-3">
-                                        <div className="flex justify-between items-end">
-                                            <label className="text-[10px] font-bold text-muted uppercase tracking-widest leading-none">CPU Limit (%)</label>
-                                            <span className="text-sm font-bold text-primary">{cpu}%</span>
-                                        </div>
-                                        <input
-                                            type="range"
-                                            min="50"
-                                            max="800"
-                                            step="50"
-                                            value={cpu}
-                                            onChange={(e) => setCpu(parseInt(e.target.value))}
-                                            className="w-full accent-primary h-1.5 bg-secondary rounded-full appearance-none transition-all"
-                                        />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-3">
-                                            <label className="text-[10px] font-bold text-muted uppercase tracking-widest block">Storage (MB)</label>
-                                            <input
-                                                type="number"
-                                                className="input-field"
-                                                value={disk}
-                                                onChange={(e) => setDisk(parseInt(e.target.value))}
-                                            />
-                                        </div>
-                                        <div className="space-y-3">
-                                            <label className="text-[10px] font-bold text-muted uppercase tracking-widest block">Port</label>
-                                            <input
-                                                type="number"
-                                                className="input-field"
-                                                value={port}
-                                                onChange={(e) => setPort(parseInt(e.target.value))}
-                                            />
-                                        </div>
-                                        {eggPortList(selectedEgg).map(extra => (
-                                            <div key={extra.env} className="space-y-3">
-                                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest block">
-                                                    {extra.name || extra.env} Port ({extra.protocol || 'tcp/udp'})
-                                                </label>
-                                                <input
-                                                    type="number"
-                                                    className="input-field"
-                                                    placeholder={`Automatic (default ${extra.default})`}
-                                                    value={extraPorts[extra.env] ?? ''}
-                                                    onChange={(e) => setExtraPorts({ ...extraPorts, [extra.env]: e.target.value })}
-                                                />
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
+                {/* 3. Resources */}
+                <Card>
+                    <CardHeader title="Resources" description="The most this server may use on its node." />
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <Field
+                            label="Memory (MB)"
+                            error={errors.memory}
+                            hint={`1024 MB is 1 GB.${(wholeNumber(memory) ?? 0) >= 1024 ? ` This is ${formatMB(wholeNumber(memory))}.` : ''}`}
+                        >
+                            {(field) => (
+                                <Input
+                                    {...field}
+                                    inputMode="numeric"
+                                    value={memory}
+                                    onChange={(event) => {
+                                        setMemory(event.target.value);
+                                        clearError('memory');
+                                    }}
+                                />
+                            )}
+                        </Field>
+                        <Field
+                            label="CPU (%)"
+                            error={errors.cpu}
+                            hint={`100 is one full core.${(wholeNumber(cpu) ?? 0) > 0 ? ` This is ${formatCpu(wholeNumber(cpu))}.` : ''}`}
+                        >
+                            {(field) => (
+                                <Input
+                                    {...field}
+                                    inputMode="numeric"
+                                    value={cpu}
+                                    onChange={(event) => {
+                                        setCpu(event.target.value);
+                                        clearError('cpu');
+                                    }}
+                                />
+                            )}
+                        </Field>
+                        <Field
+                            label="Disk (MB)"
+                            error={errors.disk}
+                            hint={`Space for the server's files.${(wholeNumber(disk) ?? 0) >= 1024 ? ` This is ${formatMB(wholeNumber(disk))}.` : ''}`}
+                        >
+                            {(field) => (
+                                <Input
+                                    {...field}
+                                    inputMode="numeric"
+                                    value={disk}
+                                    onChange={(event) => {
+                                        setDisk(event.target.value);
+                                        clearError('disk');
+                                    }}
+                                />
+                            )}
+                        </Field>
+                        <Field
+                            label="Docker image"
+                            className="sm:col-span-2 lg:col-span-3"
+                            hint={
+                                !egg
+                                    ? 'Choose a game to see its images.'
+                                    : images.length === 0
+                                      ? 'This egg lists no Docker images, so the server cannot be created. Add one on the Eggs page.'
+                                      : 'The environment the game runs in. The first one is the egg\'s default.'
+                            }
+                        >
+                            {(field) => (
+                                <Select
+                                    {...field}
+                                    value={image}
+                                    disabled={images.length === 0}
+                                    onChange={(event) => setImage(event.target.value)}
+                                    className="font-mono text-xs"
+                                >
+                                    {images.length === 0 && <option value="">{egg ? 'No images' : 'Choose a game first'}</option>}
+                                    {images.map((option) => (
+                                        <option key={option} value={option}>
+                                            {option}
+                                        </option>
+                                    ))}
+                                </Select>
+                            )}
+                        </Field>
+                    </div>
+                </Card>
 
-                            <div className="panel-card p-8 border-border/60">
-                                <h3 className="text-xl font-bold mb-8 flex items-center gap-3"><Activity className="text-primary" /> Template Variables</h3>
-                                <div className="space-y-6">
-                                    {selectedEgg.variables?.length > 0 ? (
-                                        selectedEgg.variables.map((v: any) => (
-                                            <div key={v.id} className="space-y-3">
-                                                <div className="flex justify-between">
-                                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest">{v.name}</label>
-                                                    {!v.user_editable && <span className="text-[8px] font-bold text-primary/50 uppercase tracking-widest">Read Only</span>}
-                                                </div>
-                                                <input
-                                                    type={v.input_type === 'password' ? 'password' : 'text'}
-                                                    className="input-field !py-3 !text-sm"
-                                                    value={eggVars[v.environment_variable] || ""}
-                                                    disabled={!v.user_editable}
-                                                    onChange={(e) => setEggVars({ ...eggVars, [v.environment_variable]: e.target.value })}
-                                                    placeholder={v.default_value}
-                                                />
-                                                <p className="text-[10px] text-muted leading-tight">{v.description}</p>
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <div className="py-10 text-center space-y-3 opacity-50">
-                                            <div className="w-12 h-12 rounded-2xl bg-secondary mx-auto flex items-center justify-center">
-                                                <Activity size={20} className="text-muted" />
-                                            </div>
-                                            <p className="text-xs font-bold text-muted uppercase tracking-widest">No custom variables</p>
-                                        </div>
+                {/* 4. Network */}
+                <Card>
+                    <CardHeader title="Network" description="Ports are opened on the node. Each one can be used by only one server." />
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <Field label="Primary port" hint="The port players connect to." error={errors.port}>
+                            {(field) => (
+                                <Input
+                                    {...field}
+                                    inputMode="numeric"
+                                    placeholder="For example 25565"
+                                    value={port}
+                                    onChange={(event) => {
+                                        setPort(event.target.value);
+                                        clearError('port');
+                                    }}
+                                />
+                            )}
+                        </Field>
+                        {ports.map((item) => {
+                            const hasDefault = typeof item.default === 'number' && item.default > 0;
+                            return (
+                                <Field
+                                    key={item.env}
+                                    label={`${item.name || item.env} port`}
+                                    aside={`${protocolLabel(item.protocol)} · Optional`}
+                                    hint="Leave empty to have a free port chosen for you."
+                                    error={errors[extraKey(item.env)]}
+                                >
+                                    {(field) => (
+                                        <Input
+                                            {...field}
+                                            inputMode="numeric"
+                                            placeholder={hasDefault ? `Automatic (default ${item.default})` : 'Automatic'}
+                                            value={extraPorts[item.env] ?? ''}
+                                            onChange={(event) => {
+                                                setExtraPorts((current) => ({ ...current, [item.env]: event.target.value }));
+                                                clearError(extraKey(item.env));
+                                            }}
+                                        />
                                     )}
-                                </div>
-                            </div>
-                        </div>
+                                </Field>
+                            );
+                        })}
                     </div>
+                    {!egg && <p className="mt-4 text-sm text-muted">Some games need more ports. They appear here once you choose a game.</p>}
+                </Card>
 
-                    {/* Summary Sidebar */}
-                    <div className="space-y-6 lg:sticky lg:top-8">
-                        <div className="panel-card p-8 bg-primary/5 border-primary/20 shadow-2xl overflow-hidden relative group">
-                            <div className="absolute -right-10 -top-10 w-40 h-40 bg-primary/10 rounded-full blur-3xl" />
-                            <h3 className="text-sm font-bold text-primary uppercase tracking-[0.2em] mb-8 flex items-center gap-2">
-                                <Activity size={16} /> Summary Details
-                            </h3>
-                            <div className="space-y-6">
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Selected Template</span>
-                                    <span className="font-bold text-lg">{selectedEgg?.name || "None"}</span>
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Target Node</span>
-                                    <span className="font-bold text-lg">{selectedNode?.name || "None"}</span>
-                                </div>
-                                <div className="h-px bg-primary/10" />
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="flex flex-col gap-1">
-                                        <span className="text-[10px] font-bold text-muted uppercase tracking-widest">RAM</span>
-                                        <span className="font-bold">{ram} MB</span>
-                                    </div>
-                                    <div className="flex flex-col gap-1">
-                                        <span className="text-[10px] font-bold text-muted uppercase tracking-widest">CPU</span>
-                                        <span className="font-bold">{cpu}%</span>
-                                    </div>
-                                </div>
-                            </div>
+                {/* 5. Variables */}
+                <Card>
+                    <CardHeader
+                        title="Variables"
+                        description="Settings the game is started with. You can change all of them; the owner can only change the ones that are not locked."
+                    />
+                    {!egg ? (
+                        <p className="text-sm text-muted">Choose a game to see its variables.</p>
+                    ) : eggVariables.length === 0 ? (
+                        <p className="text-sm text-muted">{egg.name} has no variables.</p>
+                    ) : (
+                        <div className="grid gap-x-4 gap-y-5 md:grid-cols-2">
+                            {eggVariables.map((variable) => (
+                                <Field
+                                    key={variable.environment_variable}
+                                    label={variable.name || variable.environment_variable}
+                                    aside={
+                                        variable.user_editable ? undefined : (
+                                            <span className="inline-flex items-center gap-1">
+                                                <Lock size={12} aria-hidden />
+                                                Locked for the owner
+                                            </span>
+                                        )
+                                    }
+                                    hint={
+                                        <>
+                                            {variable.description && <span className="block">{variable.description}</span>}
+                                            <span className="block break-all font-mono text-subtle">{variable.environment_variable}</span>
+                                        </>
+                                    }
+                                >
+                                    {(field) => (
+                                        <Input
+                                            {...field}
+                                            value={variables[variable.environment_variable] ?? ''}
+                                            spellCheck={false}
+                                            autoComplete="off"
+                                            onChange={(event) =>
+                                                setVariables((current) => ({
+                                                    ...current,
+                                                    [variable.environment_variable]: event.target.value,
+                                                }))
+                                            }
+                                        />
+                                    )}
+                                </Field>
+                            ))}
                         </div>
+                    )}
+                </Card>
 
-                        <div className="space-y-3">
-                            <button
-                                onClick={handleCreate}
-                                disabled={loading || !name || !selectedNode || !selectedUser}
-                                className="w-full btn-primary !py-5 !rounded-2xl shadow-xl shadow-primary/20 flex items-center justify-center gap-3 font-bold text-lg disabled:opacity-50"
-                            >
-                                {loading ? "Deploying..." : "Finalize & Launch"}
-                                {!loading && <Check size={24} />}
-                            </button>
-                            <button
-                                onClick={() => setStep(1)}
-                                className="w-full py-4 text-sm font-bold text-muted hover:text-foreground transition-all uppercase tracking-widest"
-                            >
-                                Change Template
-                            </button>
-                        </div>
+                {formError && (
+                    <Alert tone="danger" title="The server could not be created">
+                        {formError}
+                    </Alert>
+                )}
 
-                        {!selectedNode && (
-                            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex gap-3">
-                                <AlertTriangle size={20} className="text-amber-500 shrink-0" />
-                                <p className="text-xs text-amber-500/80 font-medium leading-relaxed">Please select a hosting node before proceeding with deployment.</p>
-                            </div>
-                        )}
-                    </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                    <Button variant="ghost" onClick={() => navigate('/admin/services')} disabled={submitting}>
+                        Cancel
+                    </Button>
+                    <Button type="submit" variant="primary" loading={submitting}>
+                        Create server
+                    </Button>
                 </div>
-            )}
-        </div>
+            </form>
+        </>
     );
 }

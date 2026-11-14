@@ -1,117 +1,161 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import Logo from '../../components/Logo';
-import api from '../../lib/api';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
+import AuthShell, { PasswordInput } from '../../components/AuthShell';
+import { Alert, Button, Field, Input, LoadingState } from '../../components/ui';
 import { useAuth } from '../../context/auth';
+import api from '../../lib/api';
+import { errorMessage, errorStatus } from '../../lib/errors';
+import {
+    PASSWORD_HINT,
+    USERNAME_HINT,
+    useSetupStatus,
+    validateConfirmation,
+    validatePassword,
+    validateUsername,
+    type AuthResponse,
+} from './account';
+
+interface FieldErrors {
+    username?: string;
+    password?: string;
+    confirmation?: string;
+}
+
+const signInLink = (
+    <Link to="/login" className="font-medium text-primary-text hover:underline">
+        Sign in
+    </Link>
+);
 
 export default function RegisterPage() {
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const { user, login } = useAuth();
+    const { status, loading } = useSetupStatus();
+
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
+    const [confirmation, setConfirmation] = useState('');
+    const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
     const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+    // Set when the API itself refuses a registration (403).
+    const [refused, setRefused] = useState(false);
 
-    const handleRegister = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const setupRequired = status?.setup_required === true;
+    useEffect(() => {
+        if (setupRequired) navigate('/setup', { replace: true });
+    }, [setupRequired, navigate]);
+
+    if (user) {
+        return <Navigate to="/" replace />;
+    }
+
+    if (loading) {
+        return (
+            <AuthShell title="Create an account">
+                <LoadingState className="py-8" />
+            </AuthShell>
+        );
+    }
+
+    if (refused || status?.registration_enabled === false) {
+        return (
+            <AuthShell
+                title="Registration is closed"
+                description="Accounts on this panel are created by an administrator. Ask yours for an account, then sign in with the details they give you."
+            >
+                <Link
+                    to="/login"
+                    className="inline-flex h-11 w-full items-center justify-center rounded-control bg-primary px-5 text-sm font-medium text-primary-foreground shadow-card transition-colors hover:bg-primary-hover"
+                >
+                    Back to sign in
+                </Link>
+            </AuthShell>
+        );
+    }
+
+    const handleSubmit = async (event: FormEvent) => {
+        event.preventDefault();
         setError('');
 
-        if (password !== confirmPassword) {
-            setError('Passwords do not match');
-            return;
-        }
+        const name = username.trim();
+        const problems: FieldErrors = {
+            username: validateUsername(name),
+            password: validatePassword(password),
+            confirmation: validateConfirmation(password, confirmation),
+        };
+        setFieldErrors(problems);
+        if (problems.username || problems.password || problems.confirmation) return;
 
-        if (password.length < 8) {
-            setError('Password must be at least 8 characters');
-            return;
-        }
-
-        setLoading(true);
-
+        setSubmitting(true);
         try {
-            const res = await api.post('/auth/register', { username, password });
+            const res = await api.post<AuthResponse>('/auth/register', { username: name, password });
             login(res.data.token, res.data.user);
-            navigate('/');
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to register');
+        } catch (err) {
+            if (errorStatus(err) === 403) {
+                setRefused(true);
+            } else if (errorStatus(err) === 409) {
+                setFieldErrors({ username: errorMessage(err, 'That username is already taken.') });
+            } else {
+                setError(errorMessage(err, 'Could not create your account. Please try again.'));
+            }
         } finally {
-            setLoading(false);
+            setSubmitting(false);
         }
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-background text-foreground font-sans dark relative overflow-hidden">
-            {/* Background glow effects */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-primary/20 rounded-full blur-[120px] pointer-events-none" />
+        <AuthShell
+            title="Create an account"
+            description="Choose a username and password for Atlas."
+            footer={<>Already have an account? {signInLink}</>}
+        >
+            <form onSubmit={handleSubmit} noValidate className="space-y-4">
+                {error && <Alert tone="danger">{error}</Alert>}
 
-            <div className="w-full max-w-md p-8 glass rounded-2xl border border-border/50 shadow-2xl relative z-10">
-                <div className="flex flex-col items-center mb-10">
-                    <Logo size="lg" className="mb-2" />
-                    <p className="text-muted text-sm mt-2">Create your account to join Atlas</p>
-                </div>
-
-                {error && (
-                    <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-lg text-sm text-center mb-4">
-                        {error}
-                    </div>
-                )}
-
-                <form onSubmit={handleRegister} className="flex flex-col gap-5">
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Username</label>
-                        <input
-                            type="text"
-                            className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="Pick a unique username"
+                <Field label="Username" hint={USERNAME_HINT} error={fieldErrors.username}>
+                    {(field) => (
+                        <Input
+                            {...field}
+                            name="username"
+                            autoComplete="username"
+                            autoCapitalize="none"
+                            spellCheck={false}
+                            autoFocus
                             value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            required
+                            onChange={(event) => setUsername(event.target.value)}
                         />
-                    </div>
+                    )}
+                </Field>
 
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Password</label>
-                        <input
-                            type="password"
-                            className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="At least 8 characters"
+                <Field label="Password" hint={PASSWORD_HINT} error={fieldErrors.password}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
+                            name="password"
+                            autoComplete="new-password"
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            required
+                            onChange={(event) => setPassword(event.target.value)}
                         />
-                    </div>
+                    )}
+                </Field>
 
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Confirm Password</label>
-                        <input
-                            type="password"
-                            className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="Repeat your password"
-                            value={confirmPassword}
-                            onChange={(e) => setConfirmPassword(e.target.value)}
-                            required
+                <Field label="Confirm password" error={fieldErrors.confirmation}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
+                            name="confirm-password"
+                            autoComplete="new-password"
+                            value={confirmation}
+                            onChange={(event) => setConfirmation(event.target.value)}
                         />
-                    </div>
+                    )}
+                </Field>
 
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-white text-black font-semibold py-3 rounded-lg hover:bg-gray-200 transition-colors mt-2 disabled:opacity-50"
-                    >
-                        {loading ? 'Creating Account...' : 'Sign Up'}
-                    </button>
-                </form>
-
-                <div className="text-center mt-8 space-y-4">
-                    <p className="text-xs text-muted">
-                        Already have an account? <Link to="/login" className="text-primary hover:text-primary/80 font-bold">Sign In</Link>
-                    </p>
-                    <p className="text-xs text-muted">
-                        By signing up, you agree to our <a href="#" className="underline hover:text-white">Terms of Service</a>
-                    </p>
-                </div>
-            </div>
-        </div>
+                <Button type="submit" variant="primary" size="lg" fullWidth loading={submitting}>
+                    Create account
+                </Button>
+            </form>
+        </AuthShell>
     );
 }

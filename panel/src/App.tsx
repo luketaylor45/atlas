@@ -1,65 +1,80 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary';
 import Layout from './components/Layout';
+import RequireAuth from './components/RequireAuth';
+import { FeedbackProvider, LoadingState } from './components/ui';
+import { AuthProvider } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeProvider';
+import AdminLayout from './pages/admin/AdminLayout';
 import LoginPage from './pages/auth/Login';
 import RegisterPage from './pages/auth/Register';
-import SetupPage from './pages/setup/Setup';
 import Dashboard from './pages/dashboard/Dashboard';
 import MyServices from './pages/dashboard/MyServices';
-import ServiceConsolePage from './pages/dashboard/ServiceConsole';
-import AdminLayout from './pages/admin/AdminLayout';
-import NodesPage from './pages/admin/Nodes';
-import CreateNodePage from './pages/admin/CreateNode';
-import AdminServicesPage from './pages/admin/Services';
-import CreateServicePage from './pages/admin/CreateService';
-import AdminOverviewPage from './pages/admin/Overview';
-import AdminUsersPage from './pages/admin/Users';
-import AdminNewsPage from './pages/admin/News';
 import SettingsPage from './pages/dashboard/Settings';
-import ImportEggPage from './pages/admin/ImportEgg';
-import AdminEggsPage from './pages/admin/Eggs';
-import { AuthProvider } from './context/AuthContext';
+import SetupPage from './pages/setup/Setup';
 
-import RequireAuth from './components/RequireAuth';
+// The server page carries the terminal and code editor, and the admin pages
+// are only used by administrators, so both load on demand.
+const ServiceConsolePage = lazy(() => import('./pages/dashboard/ServiceConsole'));
+const AdminOverviewPage = lazy(() => import('./pages/admin/Overview'));
+const NodesPage = lazy(() => import('./pages/admin/Nodes'));
+const CreateNodePage = lazy(() => import('./pages/admin/CreateNode'));
+const AdminServicesPage = lazy(() => import('./pages/admin/Services'));
+const CreateServicePage = lazy(() => import('./pages/admin/CreateService'));
+const AdminEggsPage = lazy(() => import('./pages/admin/Eggs'));
+const ImportEggPage = lazy(() => import('./pages/admin/ImportEgg'));
+const AdminUsersPage = lazy(() => import('./pages/admin/Users'));
+const AdminNewsPage = lazy(() => import('./pages/admin/News'));
 
 function App() {
-  return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/setup" element={<SetupPage />} />
+    return (
+        <ThemeProvider>
+            <ErrorBoundary>
+                <FeedbackProvider>
+                    <AuthProvider>
+                        <BrowserRouter>
+                            <Suspense fallback={<LoadingState />}>
+                                <Routes>
+                                    <Route path="/login" element={<LoginPage />} />
+                                    <Route path="/register" element={<RegisterPage />} />
+                                    <Route path="/setup" element={<SetupPage />} />
 
-          <Route path="/" element={
-            <RequireAuth>
-              <Layout />
-            </RequireAuth>
-          }>
-            <Route index element={<Dashboard />} />
-            <Route path="services" element={<MyServices />} />
-            <Route path="services/:uuid" element={<ServiceConsolePage />} />
-            <Route path="settings" element={<SettingsPage />} />
+                                    <Route
+                                        path="/"
+                                        element={
+                                            <RequireAuth>
+                                                <Layout />
+                                            </RequireAuth>
+                                        }
+                                    >
+                                        <Route index element={<Dashboard />} />
+                                        <Route path="services" element={<MyServices />} />
+                                        <Route path="services/:uuid" element={<ServiceConsolePage />} />
+                                        <Route path="settings" element={<SettingsPage />} />
 
-            {/* Admin Routes */}
-            <Route path="admin" element={<AdminLayout />}>
-              <Route index element={<AdminOverviewPage />} />
-              <Route path="nodes" element={<NodesPage />} />
-              <Route path="nodes/create" element={<CreateNodePage />} />
-              <Route path="services" element={<AdminServicesPage />} />
-              <Route path="services/create" element={<CreateServicePage />} />
-              <Route path="eggs" element={<AdminEggsPage />} />
-              <Route path="eggs/import" element={<ImportEggPage />} />
-              <Route path="users" element={<AdminUsersPage />} />
-              <Route path="news" element={<AdminNewsPage />} />
-            </Route>
-          </Route>
+                                        <Route path="admin" element={<AdminLayout />}>
+                                            <Route index element={<AdminOverviewPage />} />
+                                            <Route path="nodes" element={<NodesPage />} />
+                                            <Route path="nodes/create" element={<CreateNodePage />} />
+                                            <Route path="services" element={<AdminServicesPage />} />
+                                            <Route path="services/create" element={<CreateServicePage />} />
+                                            <Route path="eggs" element={<AdminEggsPage />} />
+                                            <Route path="eggs/import" element={<ImportEggPage />} />
+                                            <Route path="users" element={<AdminUsersPage />} />
+                                            <Route path="news" element={<AdminNewsPage />} />
+                                        </Route>
+                                    </Route>
 
-          {/* Redirect unknown routes to dashboard if logged in, or login if not (fake logic for now) */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
-  );
+                                    <Route path="*" element={<Navigate to="/" replace />} />
+                                </Routes>
+                            </Suspense>
+                        </BrowserRouter>
+                    </AuthProvider>
+                </FeedbackProvider>
+            </ErrorBoundary>
+        </ThemeProvider>
+    );
 }
 
 export default App;

@@ -1,340 +1,305 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { isAxiosError } from 'axios';
+import { ExternalLink, Pencil, Plus, Search, Server, Trash2 } from 'lucide-react';
 import api from '../../lib/api';
-import { Layers, Plus, ExternalLink, HardDrive, Cpu, Trash2, Search, Globe, Edit, X, Activity, AlertCircle } from 'lucide-react';
-import clsx from 'clsx';
+import { errorMessage } from '../../lib/errors';
+import { formatCpu, formatMB } from '../../lib/format';
+import type { Service } from '../../lib/types';
+import { usePolling } from '../../lib/usePolling';
+import {
+    Alert,
+    Button,
+    Card,
+    EmptyState,
+    IconButton,
+    Input,
+    LoadingState,
+    PageHeader,
+    StatusBadge,
+    Table,
+    Td,
+    Th,
+    Tr,
+    useConfirm,
+    useToast,
+} from '../../components/ui';
+import { ServiceEditModal } from './shared/ServiceEditModal';
+import { iconLinkClass, primaryLinkClass } from './shared/ServiceForm';
+
+function canForceDelete(error: unknown): boolean {
+    if (!isAxiosError(error)) return false;
+    const data = error.response?.data as { can_force?: unknown } | undefined;
+    return data?.can_force === true;
+}
+
+function matches(service: Service, term: string): boolean {
+    return [service.name, service.uuid, service.user?.username, service.egg?.name].some((value) =>
+        (value ?? '').toLowerCase().includes(term),
+    );
+}
 
 export default function AdminServicesPage() {
-    const navigate = useNavigate();
-    const [services, setServices] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [searchTerm, setSearchTerm] = useState('');
-    const [editingService, setEditingService] = useState<any>(null);
+    const toast = useToast();
+    const confirm = useConfirm();
 
-    const fetchServices = async () => {
+    const [services, setServices] = useState<Service[] | null>(null);
+    const [error, setError] = useState('');
+    const [search, setSearch] = useState('');
+    const [editing, setEditing] = useState<Service | null>(null);
+    const [deletingId, setDeletingId] = useState<number | null>(null);
+
+    const load = async () => {
         try {
-            const res = await api.get('/admin/services');
-            setServices(res.data);
+            const res = await api.get<Service[] | null>('/admin/services');
+            setServices(Array.isArray(res.data) ? res.data : []);
+            setError('');
         } catch (err) {
-            console.error("Failed to fetch services", err);
-        } finally {
-            setLoading(false);
+            setError(errorMessage(err, 'Could not load the servers.'));
         }
     };
 
-    useEffect(() => {
-        fetchServices();
-    }, []);
+    usePolling(load, 10000);
 
-    const filteredServices = services.filter(service =>
-        service.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        service.uuid.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        service.user?.username?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const visible = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        const list = [...(services ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+        return term ? list.filter((service) => matches(service, term)) : list;
+    }, [services, search]);
 
-    const deleteService = async (id: number, name: string) => {
-        if (!confirm(`Are you sure you want to delete "${name}"? This will permanently remove all files and data belonging to this service.`)) return;
+    const retry = () => {
+        setError('');
+        void load();
+    };
+
+    const remove = async (service: Service) => {
+        const confirmed = await confirm({
+            title: `Delete ${service.name}?`,
+            description: 'All of its files are permanently deleted, along with its settings and ports. This cannot be undone.',
+            confirmLabel: 'Delete server',
+            danger: true,
+            requireText: service.name,
+        });
+        if (!confirmed) return;
+
+        setDeletingId(service.id);
         try {
-            await api.delete(`/admin/services/${id}`);
-            fetchServices();
-        } catch (err: any) {
-            const message = err.response?.data?.error || 'Failed to delete the service.';
-            // The node refused or was unreachable. Removing only the record
-            // would leave its container and files behind, so it needs an
-            // explicit decision.
-            if (err.response?.data?.can_force) {
-                if (confirm(`${message}\n\nRemove it from the panel anyway? Its container and files will be left on the node.`)) {
-                    try {
-                        await api.delete(`/admin/services/${id}`, { params: { force: true } });
-                        fetchServices();
-                    } catch (forceErr: any) {
-                        alert(forceErr.response?.data?.error || 'Failed to delete the service.');
-                    }
-                }
-                return;
+            try {
+                await api.delete(`/admin/services/${service.id}`);
+            } catch (err) {
+                if (!canForceDelete(err)) throw err;
+
+                const forced = await confirm({
+                    title: 'Remove it from the panel anyway?',
+                    description: (
+                        <>
+                            {errorMessage(err, 'The node could not remove this server.')}
+                            <span className="mt-2 block">
+                                Removing it from the panel anyway will leave its container and files on the node, where they have to
+                                be cleaned up by hand. Only do this if the node is gone for good.
+                            </span>
+                        </>
+                    ),
+                    confirmLabel: 'Remove from panel',
+                    danger: true,
+                });
+                if (!forced) return;
+                await api.delete(`/admin/services/${service.id}`, { params: { force: true } });
             }
-            alert(message);
+            setServices((current) => current?.filter((item) => item.id !== service.id) ?? current);
+            toast.success(`${service.name} was deleted.`);
+        } catch (err) {
+            toast.error(errorMessage(err, 'Could not delete the server.'));
+        } finally {
+            setDeletingId(null);
         }
     };
 
-    const handleEdit = (service: any) => {
-        setEditingService({ ...service });
+    const saved = (updated: Service, warning?: string) => {
+        setEditing(null);
+        // The response does not carry every relation, so only the edited fields are merged before the refresh.
+        const { name, memory, cpu, disk, port, docker_image } = updated;
+        setServices(
+            (current) =>
+                current?.map((item) => (item.id === updated.id ? { ...item, name, memory, cpu, disk, port, docker_image } : item)) ??
+                current,
+        );
+        toast.success(`${updated.name} was saved.`);
+        if (warning) toast.info(warning);
+        void load();
     };
 
-    const saveEdit = async () => {
-        if (!editingService) return;
-        try {
-            const res = await api.put(`/admin/services/${editingService.id}`, {
-                name: editingService.name,
-                memory: editingService.memory,
-                cpu: editingService.cpu,
-                disk: editingService.disk,
-                port: editingService.port,
-                docker_image: editingService.docker_image,
-            });
-            setEditingService(null);
-            fetchServices();
-            if (res.data?.warning) alert(res.data.warning);
-        } catch (err: any) {
-            alert(err.response?.data?.error || 'Failed to update service.');
-        }
-    };
-
-    if (loading) return <div className="p-12 text-center animate-pulse text-muted font-bold tracking-widest mt-20 uppercase">Loading Services...</div>;
+    const total = services?.length ?? 0;
 
     return (
-        <div className="space-y-8 animation-enter">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-secondary/20 p-8 rounded-3xl border border-border/50">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-                        <Layers className="text-primary" size={28} /> Manage Services
-                    </h1>
-                    <p className="text-muted font-medium text-sm mt-1">Found {services.length} total service deployments in the system.</p>
-                </div>
+        <>
+            <PageHeader
+                title="All servers"
+                description="Every server on every node. Change a server's limits, port or image, or delete it."
+                actions={
+                    <Link to="/admin/services/create" className={primaryLinkClass}>
+                        <Plus size={16} aria-hidden />
+                        Create server
+                    </Link>
+                }
+            />
 
-                <div className="flex items-center gap-4">
-                    <div className="relative group">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted group-focus-within:text-primary transition-colors" size={18} />
-                        <input
-                            type="text"
-                            placeholder="Search by name, ID, or user..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            className="bg-background border border-border/50 pl-11 pr-5 py-2.5 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all w-80 font-medium"
-                        />
-                    </div>
-                    <button
-                        onClick={() => navigate('/admin/services/create')}
-                        className="flex items-center gap-2 bg-primary text-white px-6 py-2.5 rounded-xl font-bold text-sm hover:bg-primary/90 transition-all shadow-lg shadow-primary/20"
-                    >
-                        <Plus size={18} />
-                        Create New
-                    </button>
-                </div>
-            </div>
+            {services === null && !error && <LoadingState label="Loading servers…" />}
 
-            <div className="panel-card !p-0 border-border/40 shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                        <thead>
-                            <tr className="bg-secondary/40 border-b border-border/50">
-                                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-muted">Service & Detail</th>
-                                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-muted">Owner</th>
-                                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-muted">Node & Address</th>
-                                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-muted">Resources</th>
-                                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-muted text-right">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/30">
-                            {filteredServices.map(service => (
-                                <tr key={service.id} className="hover:bg-primary/[0.02] transition-colors group">
-                                    <td className="px-6 py-5">
-                                        <div className="flex items-center gap-4">
-                                            <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center text-muted group-hover:bg-primary group-hover:text-white transition-all shadow-inner">
-                                                <Layers size={20} />
-                                            </div>
-                                            <div>
-                                                <div className="font-bold text-sm group-hover:text-primary transition-colors">{service.name}</div>
-                                                <div className="text-[10px] text-muted font-bold mt-1 uppercase tracking-widest flex items-center gap-1.5 opacity-60">
-                                                    <span>{service.uuid.split('-')[0]}</span>
-                                                    <span className="opacity-30">|</span>
-                                                    <span>{service.egg?.name || 'Standard'}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-5">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-7 h-7 rounded-lg bg-secondary border border-border flex items-center justify-center text-[10px] font-bold text-muted">
-                                                {(service.user?.email || 'U').charAt(0).toUpperCase()}
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="text-xs font-bold">{service.user?.username || 'System'}</span>
-                                                <span className="text-[10px] text-muted font-medium">{service.user?.email}</span>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-5">
-                                        <div className="flex flex-col gap-1">
-                                            <div className="flex items-center gap-1.5 text-xs font-bold">
-                                                <Globe size={12} className="text-primary/70" /> {service.node?.name || 'Unknown'}
-                                            </div>
-                                            <div className="flex items-center gap-1.5 text-[10px] text-muted font-medium tracking-wide">
-                                                {service.node?.address}:{service.port}
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-5">
-                                        <div className="flex flex-col gap-2">
-                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted">
-                                                <HardDrive size={10} className="text-purple-500" />
-                                                <span>{service.memory} MB</span>
-                                            </div>
-                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted">
-                                                <Cpu size={10} className="text-blue-500" />
-                                                <span>{service.cpu}% CPU</span>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-5 text-right">
-                                        <div className="flex items-center justify-end gap-5">
-                                            <div className={clsx(
-                                                "flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
-                                                service.is_suspended
-                                                    ? "bg-red-500/10 text-red-500 border-red-500/20"
-                                                    : "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                                            )}>
-                                                <div className={clsx("w-1 h-1 rounded-full", service.is_suspended ? "bg-red-500" : "bg-emerald-500")} />
-                                                {service.is_suspended ? 'Suspended' : 'Healthy'}
-                                            </div>
-                                            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-200">
-                                                <button
-                                                    onClick={() => handleEdit(service)}
-                                                    className="p-2.5 bg-background hover:bg-primary hover:text-white rounded-lg border border-border shadow-sm transition-all"
-                                                    title="Edit Service"
-                                                >
-                                                    <Edit size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={() => navigate(`/services/${service.uuid}`)}
-                                                    className="p-2.5 bg-background hover:bg-primary hover:text-white rounded-lg border border-border shadow-sm transition-all"
-                                                    title="View Console"
-                                                >
-                                                    <ExternalLink size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={() => deleteService(service.id, service.name)}
-                                                    className="p-2.5 bg-background hover:bg-red-500 hover:text-white rounded-lg border border-border shadow-sm transition-all"
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            {/* Edit Modal */}
-            {editingService && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-background border border-border/60 rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden scale-in">
-                        <div className="p-8 border-b border-border/50 flex items-center justify-between bg-secondary/20">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                                    <Activity size={20} />
-                                </div>
-                                <div>
-                                    <h3 className="font-bold text-xl">Adjust Service</h3>
-                                    <p className="text-xs text-muted font-medium">Modify resource limits for {editingService.name}</p>
-                                </div>
-                            </div>
-                            <button onClick={() => setEditingService(null)} className="p-2 hover:bg-secondary rounded-xl transition-colors">
-                                <X size={20} className="text-muted" />
-                            </button>
-                        </div>
-                        <div className="p-8 space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Display Name</label>
-                                <input
-                                    className="input-field"
-                                    value={editingService.name}
-                                    onChange={e => setEditingService({ ...editingService, name: e.target.value })}
-                                />
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Memory (MB)</label>
-                                    <input
-                                        type="number"
-                                        className="input-field"
-                                        value={editingService.memory}
-                                        onChange={e => setEditingService({ ...editingService, memory: parseInt(e.target.value) })}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">CPU Limit (%)</label>
-                                    <input
-                                        type="number"
-                                        className="input-field"
-                                        value={editingService.cpu}
-                                        onChange={e => setEditingService({ ...editingService, cpu: parseInt(e.target.value) })}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Disk (MB)</label>
-                                    <input
-                                        type="number"
-                                        className="input-field"
-                                        value={editingService.disk}
-                                        onChange={e => setEditingService({ ...editingService, disk: parseInt(e.target.value) })}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Primary Port</label>
-                                <input
-                                    type="number"
-                                    className="input-field"
-                                    value={editingService.port}
-                                    onChange={e => setEditingService({ ...editingService, port: parseInt(e.target.value) })}
-                                />
-                                <p className="text-xs text-muted pl-1">Changing the port or image rebuilds the container and restarts a running server. Files are kept.</p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Container Image</label>
-                                <select
-                                    className="input-field"
-                                    value={editingService.docker_image}
-                                    onChange={e => setEditingService({ ...editingService, docker_image: e.target.value })}
-                                >
-                                    {(() => {
-                                        try {
-                                            const images = JSON.parse(editingService.egg?.docker_images || '[]');
-                                            if (images.length === 0 && editingService.docker_image) {
-                                                return <option value={editingService.docker_image}>{editingService.docker_image}</option>;
-                                            }
-                                            return images.map((img: string) => (
-                                                <option key={img} value={img}>{img}</option>
-                                            ));
-                                        } catch (e) {
-                                            return <option value={editingService.docker_image}>{editingService.docker_image}</option>;
-                                        }
-                                    })()}
-                                </select>
-                            </div>
-
-                            <div className="p-4 rounded-xl bg-blue-500/5 border border-blue-500/20 flex gap-3">
-                                <AlertCircle className="text-blue-500 shrink-0 mt-0.5" size={16} />
-                                <div className="text-[10px] text-blue-500/80 font-medium leading-relaxed">
-                                    Changes to limits will take effect after a service restart. Currently running services will not be throttled until rebooted.
-                                </div>
-                            </div>
-                        </div>
-                        <div className="p-8 bg-secondary/10 flex items-center justify-end gap-3">
-                            <button
-                                onClick={() => setEditingService(null)}
-                                className="px-6 py-2.5 rounded-xl font-bold text-sm text-muted hover:text-foreground transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={saveEdit}
-                                className="px-8 py-2.5 bg-primary text-white rounded-xl font-bold text-sm shadow-lg shadow-primary/20 hover:bg-primary/90 transition-all"
-                            >
-                                Apply Changes
-                            </button>
-                        </div>
-                    </div>
-                </div>
+            {error && (
+                <Alert
+                    tone="danger"
+                    title={services === null ? 'The servers could not be loaded' : 'The list could not be refreshed'}
+                    className="mb-4"
+                    actions={
+                        <Button size="sm" variant="outline" onClick={retry}>
+                            Try again
+                        </Button>
+                    }
+                >
+                    {error}
+                </Alert>
             )}
-        </div>
+
+            {services !== null && total === 0 && (
+                <Card flush>
+                    <EmptyState
+                        icon={<Server size={18} aria-hidden />}
+                        title="No servers yet"
+                        description="Create the first server by choosing a game, an owner and a node."
+                        action={
+                            <Link to="/admin/services/create" className={primaryLinkClass}>
+                                <Plus size={16} aria-hidden />
+                                Create server
+                            </Link>
+                        }
+                    />
+                </Card>
+            )}
+
+            {services !== null && total > 0 && (
+                <Card flush>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4 sm:px-5">
+                        <div className="relative w-full sm:max-w-xs">
+                            <Search
+                                size={16}
+                                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
+                                aria-hidden
+                            />
+                            <Input
+                                type="search"
+                                aria-label="Search servers"
+                                placeholder="Search by name, ID, owner or game"
+                                value={search}
+                                onChange={(event) => setSearch(event.target.value)}
+                                className="pl-9"
+                            />
+                        </div>
+                        <p className="tabular text-sm text-muted">
+                            {visible.length === total ? `${total} ${total === 1 ? 'server' : 'servers'}` : `${visible.length} of ${total}`}
+                        </p>
+                    </div>
+
+                    {visible.length === 0 ? (
+                        <EmptyState
+                            icon={<Search size={18} aria-hidden />}
+                            title="No servers match your search"
+                            description="Search looks at the name, ID, owner and game."
+                            action={
+                                <Button variant="outline" onClick={() => setSearch('')}>
+                                    Clear search
+                                </Button>
+                            }
+                        />
+                    ) : (
+                        <Table>
+                            <thead>
+                                <tr>
+                                    <Th>Server</Th>
+                                    <Th>Status</Th>
+                                    <Th>Owner</Th>
+                                    <Th>Game</Th>
+                                    <Th>Node</Th>
+                                    <Th>Address</Th>
+                                    <Th>Limits</Th>
+                                    <Th className="text-right">Actions</Th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {visible.map((service) => (
+                                    <Tr key={service.id}>
+                                        <Td>
+                                            <Link
+                                                to={`/services/${service.uuid}`}
+                                                className="block max-w-56 truncate font-medium text-foreground hover:text-primary-text hover:underline"
+                                            >
+                                                {service.name}
+                                            </Link>
+                                            <span className="block font-mono text-xs text-subtle" title={service.uuid}>
+                                                {service.uuid.slice(0, 8)}
+                                            </span>
+                                        </Td>
+                                        <Td>
+                                            <StatusBadge status={service.status} suspended={service.is_suspended} />
+                                        </Td>
+                                        <Td className="whitespace-nowrap">{service.user?.username ?? <Missing />}</Td>
+                                        <Td className="whitespace-nowrap">{service.egg?.name ?? <Missing />}</Td>
+                                        <Td className="whitespace-nowrap">
+                                            {service.node ? (
+                                                <span className="inline-flex items-center gap-2">
+                                                    {service.node.name}
+                                                    {!service.node.is_online && <span className="text-xs text-danger">Offline</span>}
+                                                </span>
+                                            ) : (
+                                                <Missing />
+                                            )}
+                                        </Td>
+                                        <Td className="whitespace-nowrap font-mono text-xs text-muted">
+                                            {service.node?.address ? `${service.node.address}:${service.port}` : `:${service.port}`}
+                                        </Td>
+                                        <Td className="tabular whitespace-nowrap text-xs text-muted">
+                                            <div>
+                                                {formatMB(service.memory)} memory · {formatCpu(service.cpu)}
+                                            </div>
+                                            <div>{formatMB(service.disk)} disk</div>
+                                        </Td>
+                                        <Td>
+                                            <div className="flex items-center justify-end gap-1">
+                                                <Link
+                                                    to={`/services/${service.uuid}`}
+                                                    className={iconLinkClass}
+                                                    aria-label={`Open ${service.name}`}
+                                                    title="Open"
+                                                >
+                                                    <ExternalLink size={16} aria-hidden />
+                                                </Link>
+                                                <IconButton label={`Edit ${service.name}`} size="sm" onClick={() => setEditing(service)}>
+                                                    <Pencil size={16} aria-hidden />
+                                                </IconButton>
+                                                <IconButton
+                                                    label={`Delete ${service.name}`}
+                                                    size="sm"
+                                                    className="hover:bg-danger/10 hover:text-danger"
+                                                    loading={deletingId === service.id}
+                                                    onClick={() => void remove(service)}
+                                                >
+                                                    <Trash2 size={16} aria-hidden />
+                                                </IconButton>
+                                            </div>
+                                        </Td>
+                                    </Tr>
+                                ))}
+                            </tbody>
+                        </Table>
+                    )}
+                </Card>
+            )}
+
+            {editing && <ServiceEditModal key={editing.id} service={editing} onClose={() => setEditing(null)} onSaved={saved} />}
+        </>
     );
+}
+
+function Missing() {
+    return <span className="text-subtle">—</span>;
 }

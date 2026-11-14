@@ -1,191 +1,219 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import api from '../../lib/api';
-import clsx from 'clsx';
+import { Link } from 'react-router-dom';
+import { Activity, Megaphone, Play, Server } from 'lucide-react';
+import ServiceCard, { NoServers } from '../../components/ServiceCard';
 import {
-    Layers, ShieldCheck,
-    ArrowRight, Zap, Bell, Clock,
-    CheckCircle, AlertTriangle
-} from 'lucide-react';
+    Alert,
+    Badge,
+    Button,
+    Card,
+    CardHeader,
+    EmptyState,
+    PageHeader,
+    Skeleton,
+    StatTile,
+    type Tone,
+} from '../../components/ui';
 import { useAuth } from '../../context/auth';
+import { formatDateTime, formatRelative } from '../../lib/format';
+import type { NewsItem, Service } from '../../lib/types';
+import { useResource, type Resource } from './useResource';
 
-export default function UserDashboard() {
-    const { user } = useAuth();
-    const navigate = useNavigate();
-    const [services, setServices] = useState<any[]>([]);
-    const [overview, setOverview] = useState<any>({ total_services: 0, running_services: 0, health: 'OPTIMAL' });
-    const [news, setNews] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+interface Overview {
+    total_services: number;
+    running_services: number;
+    health: 'OPTIMAL' | 'DEGRADED' | string;
+}
 
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [sRes, oRes, nRes] = await Promise.all([
-                    api.get('/services'),
-                    api.get('/services/overview'),
-                    api.get('/news')
-                ]);
-                setServices(sRes.data);
-                setOverview(oRes.data);
-                setNews(nRes.data);
-            } catch (err) {
-                console.error("Failed to fetch dashboard data", err);
-            } finally {
-                setLoading(false);
+const SERVERS_SHOWN = 5;
+const NEWS_SHOWN = 5;
+
+const newsTones: Record<string, Tone> = {
+    release: 'primary',
+    status: 'info',
+    maintenance: 'warning',
+};
+
+function RetryAlert({ resource, className }: { resource: Resource<unknown>; className?: string }) {
+    if (!resource.error) return null;
+    return (
+        <Alert
+            tone="danger"
+            className={className}
+            actions={
+                <Button size="sm" variant="outline" loading={resource.retrying} onClick={resource.retry}>
+                    Try again
+                </Button>
             }
-        };
-        fetchData();
-    }, []);
+        >
+            {resource.error}
+        </Alert>
+    );
+}
+
+function OverviewTiles({ overview }: { overview: Resource<Overview> }) {
+    if (overview.loading) {
+        return (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                {[0, 1, 2].map((index) => (
+                    <Skeleton key={index} className="h-[104px] rounded-card" />
+                ))}
+            </div>
+        );
+    }
+
+    const data = overview.data;
+    const healthy = data?.health === 'OPTIMAL';
 
     return (
-        <div className="space-y-10 animate-in">
-            {/* Welcome Header */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div>
-                    <h1 className="text-4xl font-bold tracking-tight mb-2">Welcome back, {user?.username}</h1>
-                    <p className="text-muted text-lg">Here's an overview of your services and system status.</p>
+        <div className="space-y-4">
+            <RetryAlert resource={overview} />
+            {data && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <StatTile label="Servers" value={data.total_services} icon={<Server size={16} aria-hidden />} />
+                    <StatTile
+                        label="Running"
+                        value={data.running_services}
+                        detail={`of ${data.total_services}`}
+                        icon={<Play size={16} aria-hidden />}
+                    />
+                    <StatTile
+                        label="Health"
+                        value={
+                            <span className={healthy ? 'block text-lg leading-8' : 'block text-lg leading-8 text-warning'}>
+                                {healthy ? 'All nodes online' : 'A node is offline'}
+                            </span>
+                        }
+                        detail={healthy ? undefined : 'Servers on that node cannot be reached right now.'}
+                        icon={<Activity size={16} aria-hidden />}
+                    />
                 </div>
-                <div className={clsx(
-                    "px-5 py-2.5 rounded-2xl flex items-center gap-3 border",
-                    overview.health === 'OPTIMAL' ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" : "bg-amber-500/10 border-amber-500/20 text-amber-500"
-                )}>
-                    {overview.health === 'OPTIMAL' ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}
-                    <span className="text-sm font-bold uppercase tracking-wider">
-                        {overview.health === 'OPTIMAL' ? 'System Optimal' : 'System Degraded'}
-                    </span>
-                </div>
-            </div>
-
-            {/* Quick Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="panel-card bg-card border-border shadow-sm p-6">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-primary/10 text-primary">
-                            <Layers size={24} />
-                        </div>
-                        <div>
-                            <p className="text-xs font-bold text-muted uppercase tracking-widest mb-1">Total Services</p>
-                            <h3 className="text-3xl font-bold tracking-tight">{overview.total_services}</h3>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="panel-card bg-card border-border shadow-sm p-6">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-500">
-                            <Zap size={24} />
-                        </div>
-                        <div>
-                            <p className="text-xs font-bold text-muted uppercase tracking-widest mb-1">Active Services</p>
-                            <h3 className="text-3xl font-bold tracking-tight">{overview.running_services}</h3>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="panel-card bg-card border-border shadow-sm p-6">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-blue-500/10 text-blue-500">
-                            <ShieldCheck size={24} />
-                        </div>
-                        <div>
-                            <p className="text-xs font-bold text-muted uppercase tracking-widest mb-1">Infrastructure</p>
-                            <h3 className={clsx(
-                                "text-3xl font-bold tracking-tight",
-                                overview.health === 'OPTIMAL' ? "text-foreground" : "text-amber-500"
-                            )}>
-                                {overview.health === 'OPTIMAL' ? 'Stable' : 'Degraded'}
-                            </h3>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Recent Services */}
-                <div className="lg:col-span-2 space-y-6">
-                    <div className="flex items-center justify-between">
-                        <h2 className="text-xl font-bold flex items-center gap-2">
-                            <Clock size={20} className="text-primary" />
-                            Recent Activity
-                        </h2>
-                        <button
-                            onClick={() => navigate('/services')}
-                            className="text-sm font-bold text-primary hover:underline flex items-center gap-1 uppercase tracking-wider"
-                        >
-                            View All <ArrowRight size={14} />
-                        </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {loading ? (
-                            Array(4).fill(0).map((_, i) => (
-                                <div key={i} className="h-32 bg-secondary/50 rounded-2xl animate-pulse border border-border/40" />
-                            ))
-                        ) : services.length === 0 ? (
-                            <div className="col-span-2 panel-card bg-secondary/10 border-dashed border-border/60 py-16 text-center">
-                                <p className="text-muted font-bold mb-6">No services found in your account.</p>
-                                <button
-                                    onClick={() => navigate('/services')}
-                                    className="px-8 py-3 bg-primary text-white rounded-xl font-bold shadow-lg shadow-primary/20 hover:scale-105 transition-transform"
-                                >
-                                    Deploy First Service
-                                </button>
-                            </div>
-                        ) : (
-                            services.slice(0, 4).map(service => (
-                                <div
-                                    key={service.uuid}
-                                    onClick={() => navigate(`/services/${service.uuid}`)}
-                                    className="panel-card bg-card border-border hover:border-primary/40 transition-all cursor-pointer group p-6"
-                                >
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="p-2.5 rounded-lg bg-secondary text-primary group-hover:bg-primary group-hover:text-white transition-all shadow-inner">
-                                            <Layers size={20} />
-                                        </div>
-                                        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${service.status === 'running' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-muted/10 text-muted border-muted/20'}`}>
-                                            <div className={`w-1 h-1 rounded-full ${service.status === 'running' ? 'bg-emerald-500' : 'bg-muted'}`} />
-                                            {service.status}
-                                        </div>
-                                    </div>
-                                    <h4 className="font-bold text-lg truncate group-hover:text-primary transition-colors">{service.name}</h4>
-                                    <p className="text-[10px] text-muted font-bold uppercase tracking-widest mt-1.5">{service.egg?.name}</p>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-
-                {/* System Announcements */}
-                <div className="space-y-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2">
-                        <Bell size={20} className="text-primary" />
-                        Latest News
-                    </h2>
-                    <div className="panel-card p-6 space-y-6 border-border/60 bg-secondary/10">
-                        {news.length === 0 ? (
-                            <p className="text-xs text-muted text-center py-4 font-bold border-dashed border border-border/40 rounded-xl">No Recent Announcements</p>
-                        ) : (
-                            news.slice(0, 3).map((item, idx) => (
-                                <div key={item.id}>
-                                    <div className="space-y-4">
-                                        <span className={clsx(
-                                            "text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border",
-                                            item.type === 'Release' ? "bg-primary/10 text-primary border-primary/20" :
-                                                item.type === 'Status' ? "bg-blue-500/10 text-blue-500 border-blue-500/20" :
-                                                    "bg-amber-500/10 text-amber-500 border-amber-500/20"
-                                        )}>
-                                            {item.type}
-                                        </span>
-                                        <h4 className="text-sm font-bold leading-tight mt-1">{item.title}</h4>
-                                        <p className="text-xs text-muted leading-relaxed font-medium line-clamp-3">{item.content}</p>
-                                    </div>
-                                    {idx !== Math.min(news.length, 3) - 1 && <div className="h-px bg-border/40 mt-6" />}
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            </div>
+            )}
         </div>
+    );
+}
+
+function ServersCard({ servers, isAdmin }: { servers: Resource<Service[]>; isAdmin: boolean }) {
+    const list = servers.data ?? [];
+
+    return (
+        <Card flush className="lg:col-span-2">
+            <CardHeader
+                title="Your servers"
+                className="mb-0 px-5 pb-4 pt-5 sm:px-6"
+                actions={
+                    list.length > 0 && (
+                        <Link to="/services" className="text-sm font-medium text-primary-text hover:underline">
+                            {list.length > SERVERS_SHOWN ? `View all ${list.length}` : 'View all'}
+                        </Link>
+                    )
+                }
+            />
+
+            <RetryAlert resource={servers} className="mx-5 mb-4 sm:mx-6" />
+
+            {servers.loading ? (
+                <div className="space-y-3 px-5 pb-5 sm:px-6" role="status" aria-label="Loading servers">
+                    {[0, 1, 2].map((index) => (
+                        <Skeleton key={index} className="h-12" />
+                    ))}
+                </div>
+            ) : list.length > 0 ? (
+                <ul className="divide-y divide-border border-t border-border">
+                    {list.slice(0, SERVERS_SHOWN).map((service) => (
+                        <ServiceCard key={service.uuid} service={service} compact />
+                    ))}
+                </ul>
+            ) : (
+                !servers.error && <NoServers isAdmin={isAdmin} />
+            )}
+        </Card>
+    );
+}
+
+function NewsCard({ news, isAdmin }: { news: Resource<NewsItem[]>; isAdmin: boolean }) {
+    const list = news.data ?? [];
+
+    return (
+        <Card>
+            <CardHeader title="Announcements" />
+
+            <RetryAlert resource={news} className="mb-4" />
+
+            {news.loading ? (
+                <div className="space-y-3" role="status" aria-label="Loading announcements">
+                    <Skeleton className="h-4 w-2/3" />
+                    <Skeleton className="h-4" />
+                    <Skeleton className="h-4 w-5/6" />
+                </div>
+            ) : list.length > 0 ? (
+                <ul className="-my-4 divide-y divide-border">
+                    {list.slice(0, NEWS_SHOWN).map((item) => (
+                        <li key={item.id} className="py-4">
+                            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                                {item.type && <Badge tone={newsTones[item.type.toLowerCase()] ?? 'neutral'}>{item.type}</Badge>}
+                                <time
+                                    dateTime={item.created_at}
+                                    title={formatDateTime(item.created_at)}
+                                    className="text-xs text-muted"
+                                >
+                                    {formatRelative(item.created_at)}
+                                </time>
+                            </div>
+                            <h3 className="mt-2 break-words text-sm font-medium text-foreground">{item.title}</h3>
+                            <p className="mt-1 whitespace-pre-line break-words text-sm text-muted">{item.content}</p>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                !news.error && (
+                    <EmptyState
+                        className="py-8"
+                        icon={<Megaphone size={18} aria-hidden />}
+                        title="No announcements"
+                        description={
+                            isAdmin ? (
+                                <>
+                                    Post one from{' '}
+                                    <Link to="/admin/news" className="font-medium text-primary-text hover:underline">
+                                        Announcements
+                                    </Link>{' '}
+                                    to tell everyone about updates or maintenance.
+                                </>
+                            ) : (
+                                'Updates and maintenance notices from your administrator will appear here.'
+                            )
+                        }
+                    />
+                )
+            )}
+        </Card>
+    );
+}
+
+export default function Dashboard() {
+    const { user } = useAuth();
+    const isAdmin = Boolean(user?.is_admin);
+
+    // Three independent requests: one failing never blanks the others.
+    const overview = useResource<Overview>('/services/overview', 'Could not load your server summary.', 10_000);
+    const servers = useResource<Service[]>('/services', 'Could not load your servers.', 10_000);
+    const news = useResource<NewsItem[]>('/news', 'Could not load announcements.', 60_000);
+
+    return (
+        <>
+            <PageHeader
+                title={user?.username ? `Welcome back, ${user.username}` : 'Welcome back'}
+                description="Your servers at a glance, and the latest announcements."
+            />
+
+            <div className="space-y-6">
+                <OverviewTiles overview={overview} />
+
+                <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
+                    <ServersCard servers={servers} isAdmin={isAdmin} />
+                    <NewsCard news={news} isAdmin={isAdmin} />
+                </div>
+            </div>
+        </>
     );
 }

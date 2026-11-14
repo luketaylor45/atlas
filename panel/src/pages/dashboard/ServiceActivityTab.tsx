@@ -1,245 +1,352 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Download, History } from 'lucide-react';
 import api from '../../lib/api';
-import { Activity, Download, User, Clock, MapPin, Monitor, Zap, FileText, Settings, Key, Users as UsersIcon } from 'lucide-react';
-import clsx from 'clsx';
+import { cn } from '../../lib/cn';
+import { errorMessage } from '../../lib/errors';
+import { formatDateTime, formatRelative } from '../../lib/format';
+import { parseJSON, type ActivityLog } from '../../lib/types';
+import { usePolling } from '../../lib/usePolling';
+import {
+    Alert,
+    Badge,
+    Button,
+    Card,
+    CardHeader,
+    EmptyState,
+    Field,
+    LoadingState,
+    Select,
+    Table,
+    Td,
+    Th,
+    Tr,
+    useToast,
+} from '../../components/ui';
 
-interface ActivityLog {
-    id: number;
-    service_id: number;
-    user_id: number;
-    action: string;
-    resource: string;
-    description: string;
-    ip_address: string;
-    user_agent: string;
-    metadata: string;
-    created_at: string;
-    user?: {
-        username: string;
-    };
+interface ActivityPage {
+    logs: ActivityLog[] | null;
+    total: number;
+    limit: number;
+    offset: number;
 }
 
-export default function ServiceActivityTab() {
-    const { uuid } = useParams();
-    const [logs, setLogs] = useState<ActivityLog[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('all');
+const PAGE_SIZE = 25;
+const EXPORT_PAGE_SIZE = 200;
+const EXPORT_MAX_ROWS = 10000;
+
+const actionLabels: Record<string, string> = {
+    power: 'Power',
+    sftp_login: 'SFTP sign-in',
+    file_extract: 'Archive extracted',
+    reinstall: 'Reinstall',
+    install_cancel: 'Install cancelled',
+    rebuild: 'Container rebuilt',
+    user_added: 'Sub-user added',
+    user_updated: 'Sub-user changed',
+    user_removed: 'Sub-user removed',
+    create: 'Server created',
+    update: 'Server changed',
+};
+
+function actionLabel(action: string): string {
+    if (actionLabels[action]) return actionLabels[action];
+    const words = action.replace(/_/g, ' ').trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Unknown';
+}
+
+function actor(log: ActivityLog): string {
+    return log.user?.username || 'System';
+}
+
+function metadataEntries(log: ActivityLog): [string, string][] {
+    const parsed = parseJSON<unknown>(log.metadata, null);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.entries(parsed).map(([key, value]) => [
+        key.replace(/_/g, ' '),
+        value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value),
+    ]);
+}
+
+/**
+ * One CSV cell: always quoted, quotes doubled, and anything a spreadsheet
+ * would run as a formula is prefixed so it stays text.
+ */
+function csvCell(value: string | number | null | undefined): string {
+    let text = value === null || value === undefined ? '' : String(value);
+    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+}
+
+/** An unreadable date is exported as it was stored rather than aborting the export. */
+function isoTime(value: string): string {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+function toCsv(logs: ActivityLog[]): string {
+    const rows: (string | number | null | undefined)[][] = [
+        ['Time', 'User', 'Action', 'Resource', 'Description', 'IP address', 'Details'],
+        ...logs.map((log) => [
+            isoTime(log.created_at),
+            actor(log),
+            log.action,
+            log.resource,
+            log.description,
+            log.ip_address,
+            metadataEntries(log)
+                .map(([key, value]) => `${key}: ${value}`)
+                .join('; '),
+        ]),
+    ];
+    return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+}
+
+export default function ServiceActivityTab({ uuid }: { uuid: string }) {
+    const toast = useToast();
+
+    const [filter, setFilter] = useState('');
+    const [offset, setOffset] = useState(0);
+    const [refresh, setRefresh] = useState(0);
+    const [exporting, setExporting] = useState(false);
+
+    const query = `${filter}|${offset}`;
+    const [page, setPage] = useState<{ query: string; logs: ActivityLog[]; total: number } | null>(null);
+    const [failure, setFailure] = useState<{ query: string; message: string } | null>(null);
 
     useEffect(() => {
-        fetchActivityLogs();
-        // Refresh every 10 seconds
-        const interval = setInterval(fetchActivityLogs, 10000);
-        return () => clearInterval(interval);
-    }, [uuid]);
+        let cancelled = false;
+        void (async () => {
+            try {
+                const res = await api.get<ActivityPage>(`/services/${uuid}/logs`, {
+                    params: { limit: PAGE_SIZE, offset, ...(filter ? { action: filter } : {}) },
+                });
+                if (cancelled) return;
+                setPage({ query: `${filter}|${offset}`, logs: res.data.logs ?? [], total: Number(res.data.total) || 0 });
+                setFailure(null);
+            } catch (err) {
+                if (!cancelled) setFailure({ query: `${filter}|${offset}`, message: errorMessage(err, 'Could not load the activity log.') });
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [uuid, filter, offset, refresh]);
 
-    const fetchActivityLogs = async () => {
+    // Keep the list fresh. The first tick is skipped: the effect above has already loaded it.
+    const firstTick = useRef(true);
+    usePolling(() => {
+        if (firstTick.current) {
+            firstTick.current = false;
+            return;
+        }
+        setRefresh((current) => current + 1);
+    }, 15000);
+
+    const error = failure && failure.query === query ? failure.message : null;
+    // While another page or filter is loading, the previous rows stay visible but dimmed.
+    const stale = page !== null && page.query !== query;
+    const logs = page?.logs ?? [];
+    const total = page?.total ?? 0;
+    const first = total === 0 ? 0 : offset + 1;
+    const last = Math.min(offset + logs.length, total);
+
+    const exportCsv = async () => {
+        setExporting(true);
         try {
-            const res = await api.get(`/services/${uuid}/logs`);
-            setLogs(res.data.logs || []);
+            const all: ActivityLog[] = [];
+            let expected = Infinity;
+            while (all.length < Math.min(expected, EXPORT_MAX_ROWS)) {
+                const res = await api.get<ActivityPage>(`/services/${uuid}/logs`, {
+                    params: { limit: EXPORT_PAGE_SIZE, offset: all.length, ...(filter ? { action: filter } : {}) },
+                });
+                const batch = res.data.logs ?? [];
+                expected = Number(res.data.total) || 0;
+                if (batch.length === 0) break;
+                all.push(...batch);
+            }
+            if (all.length === 0) {
+                toast.info('There is no activity to export.');
+                return;
+            }
+
+            // The leading BOM makes spreadsheets read the file as UTF-8.
+            const blob = new Blob(['﻿', toCsv(all)], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `activity-${uuid.substring(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+
+            if (expected > all.length) {
+                toast.info(`Exported the newest ${all.length} entries.`);
+            }
         } catch (err) {
-            console.error('Failed to fetch activity logs', err);
-            setLogs([]);
+            toast.error(errorMessage(err, 'Could not export the activity log.'));
         } finally {
-            setLoading(false);
+            setExporting(false);
         }
     };
 
-    const actionIcons: Record<string, any> = {
-        power: Zap,
-        sftp_login: Key,
-        file_edit: FileText,
-        file_upload: FileText,
-        file_delete: FileText,
-        startup_change: Settings,
-        user_added: UsersIcon,
-        user_removed: UsersIcon,
-        user_updated: UsersIcon,
-    };
-
-    const actionColors: Record<string, string> = {
-        power: 'text-blue-500 bg-blue-500/10',
-        sftp_login: 'text-purple-500 bg-purple-500/10',
-        file_edit: 'text-amber-500 bg-amber-500/10',
-        file_upload: 'text-emerald-500 bg-emerald-500/10',
-        file_delete: 'text-red-500 bg-red-500/10',
-        startup_change: 'text-primary bg-primary/10',
-        user_added: 'text-green-500 bg-green-500/10',
-        user_removed: 'text-red-500 bg-red-500/10',
-        user_updated: 'text-blue-500 bg-blue-500/10',
-    };
-
-    const getActionIcon = (action: string) => {
-        return actionIcons[action] || Activity;
-    };
-
-    const getActionColor = (action: string) => {
-        return actionColors[action] || 'text-muted bg-secondary';
-    };
-
-    const filteredLogs = filter === 'all' ? logs : logs.filter(log => log.action === filter);
-
-    const exportLogs = () => {
-        const csv = [
-            ['Time', 'User', 'Action', 'Resource', 'Description', 'IP Address'],
-            ...filteredLogs.map(log => [
-                new Date(log.created_at).toLocaleString(),
-                log.user?.username || `User #${log.user_id}`,
-                log.action,
-                log.resource || '-',
-                log.description,
-                log.ip_address
-            ])
-        ].map(row => row.join(',')).join('\n');
-
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `activity-log-${uuid}-${Date.now()}.csv`;
-        a.click();
-    };
-
-    if (loading) return <div className="p-12 text-center text-muted animate-pulse">Loading activity logs...</div>;
-
     return (
-        <div className="space-y-8">
-            {/* Header */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div>
-                    <h3 className="text-2xl font-bold tracking-tight flex items-center gap-3">
-                        <Activity className="text-primary" size={28} /> Activity Log
-                    </h3>
-                    <p className="text-muted text-sm mt-1">Complete audit trail of all service actions</p>
-                </div>
-                <div className="flex items-center gap-3">
-                    <select
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                        className="input-field w-auto"
-                    >
-                        <option value="all">All Actions</option>
-                        <option value="power">Power Actions</option>
-                        <option value="sftp_login">SFTP Logins</option>
-                        <option value="file_edit">File Changes</option>
-                        <option value="startup_change">Startup Changes</option>
-                        <option value="user_added">User Management</option>
-                    </select>
-                    <button
-                        onClick={exportLogs}
-                        disabled={filteredLogs.length === 0}
-                        className="btn-primary flex items-center gap-2 disabled:opacity-50"
-                    >
-                        <Download size={18} /> Export CSV
-                    </button>
-                </div>
+        <Card flush>
+            <CardHeader
+                title="Activity"
+                description="What has been done to this server, and by whom."
+                className="mb-0 px-5 pt-5 sm:px-6 sm:pt-6"
+                actions={
+                    <Button variant="outline" loading={exporting} onClick={exportCsv} icon={<Download size={16} aria-hidden />}>
+                        Export CSV
+                    </Button>
+                }
+            />
+
+            <div className="px-5 pb-5 pt-4 sm:px-6">
+                <Field label="Show" className="max-w-xs">
+                    {(field) => (
+                        <Select
+                            {...field}
+                            value={filter}
+                            onChange={(event) => {
+                                setFilter(event.target.value);
+                                setOffset(0);
+                            }}
+                        >
+                            <option value="">All activity</option>
+                            {Object.entries(actionLabels).map(([action, label]) => (
+                                <option key={action} value={action}>
+                                    {label}
+                                </option>
+                            ))}
+                        </Select>
+                    )}
+                </Field>
             </div>
 
-            {/* Timeline */}
-            {filteredLogs.length === 0 ? (
-                <div className="panel-card p-12 text-center border-dashed border-2">
-                    <Activity size={48} className="mx-auto text-muted/30 mb-4" />
-                    <h4 className="font-bold text-lg mb-2">No Activity Yet</h4>
-                    <p className="text-sm text-muted">Actions performed on this service will appear here</p>
-                    <p className="text-xs text-muted mt-4">Tracks: Power actions, SFTP logins, file operations, and more</p>
-                </div>
-            ) : (
-                <div className="space-y-4">
-                    {filteredLogs.map((log) => {
-                        const Icon = getActionIcon(log.action);
-                        const colorClass = getActionColor(log.action);
-                        return (
-                            <div key={log.id} className="relative">
-                                <div className="panel-card p-6 hover:border-primary/30 transition-all">
-                                    <div className="flex gap-6">
-                                        {/* Icon */}
-                                        <div className={clsx(
-                                            "w-14 h-14 rounded-2xl flex items-center justify-center shrink-0",
-                                            colorClass
-                                        )}>
-                                            <Icon size={24} />
-                                        </div>
-
-                                        {/* Content */}
-                                        <div className="flex-1 space-y-3">
-                                            <div className="flex items-start justify-between gap-4">
-                                                <div>
-                                                    <h4 className="font-bold text-lg">{log.description}</h4>
-                                                    {log.resource && (
-                                                        <p className="text-sm text-muted font-mono mt-1">{log.resource}</p>
-                                                    )}
-                                                </div>
-                                                <div className="text-right shrink-0">
-                                                    <div className="text-xs font-bold text-primary uppercase tracking-wider">
-                                                        {log.action.replace('_', ' ')}
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-3 border-t border-border/50">
-                                                <div className="flex items-center gap-2 text-xs">
-                                                    <User size={14} className="text-muted" />
-                                                    <span className="font-medium">{log.user?.username || `User #${log.user_id}`}</span>
-                                                </div>
-                                                <div className="flex items-center gap-2 text-xs text-muted">
-                                                    <Clock size={14} />
-                                                    <span>{new Date(log.created_at).toLocaleString()}</span>
-                                                </div>
-                                                <div className="flex items-center gap-2 text-xs text-muted">
-                                                    <MapPin size={14} />
-                                                    <span className="font-mono">
-                                                        {log.ip_address === '::1' || log.ip_address === '127.0.0.1' ? 'Cluster Internal' : log.ip_address}
-                                                    </span>
-                                                </div>
-                                                <div className="flex items-center gap-2 text-xs text-muted">
-                                                    <Monitor size={14} />
-                                                    <span className="truncate" title={log.user_agent}>
-                                                        {log.user_agent.substring(0, 20)}...
-                                                    </span>
-                                                </div>
-                                            </div>
-
-                                            {log.metadata && (
-                                                <details className="text-xs">
-                                                    <summary className="cursor-pointer text-muted hover:text-foreground font-medium">
-                                                        View Metadata
-                                                    </summary>
-                                                    <pre className="mt-2 p-3 bg-black/30 rounded-lg font-mono text-[10px] overflow-x-auto">
-                                                        {JSON.stringify(JSON.parse(log.metadata), null, 2)}
-                                                    </pre>
-                                                </details>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
+            {error && (
+                <div className="px-5 pb-5 sm:px-6">
+                    <Alert
+                        tone="danger"
+                        title="The activity log could not be loaded"
+                        actions={
+                            <Button size="sm" variant="outline" onClick={() => setRefresh((current) => current + 1)}>
+                                Try again
+                            </Button>
+                        }
+                    >
+                        {error}
+                    </Alert>
                 </div>
             )}
 
-            {/* Stats Summary */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {['power', 'sftp_login', 'file_edit', 'startup_change'].map(action => {
-                    const count = logs.filter(log => log.action === action).length;
-                    const Icon = getActionIcon(action);
-                    const colorClass = getActionColor(action);
+            {page === null ? (
+                !error && <LoadingState label="Loading activity…" />
+            ) : logs.length === 0 ? (
+                <div className={cn('border-t border-border', stale && 'opacity-60')}>
+                    <EmptyState
+                        icon={<History size={18} aria-hidden />}
+                        title={filter ? 'No activity of this kind' : 'No activity yet'}
+                        description={
+                            filter
+                                ? 'Choose "All activity" to see everything recorded for this server.'
+                                : 'Power actions, SFTP sign-ins and changes to this server will be listed here as they happen.'
+                        }
+                        action={
+                            filter ? (
+                                <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                        setFilter('');
+                                        setOffset(0);
+                                    }}
+                                >
+                                    Show all activity
+                                </Button>
+                            ) : undefined
+                        }
+                    />
+                </div>
+            ) : (
+                <div className={cn('border-t border-border transition-opacity', stale && 'opacity-60')} aria-busy={stale || undefined}>
+                    <Table>
+                        <thead>
+                            <tr>
+                                <Th>When</Th>
+                                <Th>Who</Th>
+                                <Th>Action</Th>
+                                <Th>What happened</Th>
+                                <Th>IP address</Th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {logs.map((log) => {
+                                const details = metadataEntries(log);
+                                return (
+                                    <Tr key={log.id}>
+                                        <Td className="whitespace-nowrap align-top text-muted">
+                                            <time dateTime={log.created_at} title={formatDateTime(log.created_at)}>
+                                                {formatRelative(log.created_at)}
+                                            </time>
+                                        </Td>
+                                        <Td className="whitespace-nowrap align-top font-medium">{actor(log)}</Td>
+                                        <Td className="align-top">
+                                            <Badge>{actionLabel(log.action)}</Badge>
+                                        </Td>
+                                        <Td className="min-w-64 align-top">
+                                            <p className="break-words">{log.description || '—'}</p>
+                                            {log.resource && <p className="mt-0.5 break-all font-mono text-xs text-muted">{log.resource}</p>}
+                                            {details.length > 0 && (
+                                                <details className="mt-1 text-xs text-muted">
+                                                    <summary className="w-fit hover:text-foreground">Details</summary>
+                                                    <dl className="mt-1 space-y-0.5">
+                                                        {details.map(([key, value]) => (
+                                                            <div key={key} className="flex flex-wrap gap-x-2">
+                                                                <dt>{key}:</dt>
+                                                                <dd className="break-all font-mono text-foreground">{value}</dd>
+                                                            </div>
+                                                        ))}
+                                                    </dl>
+                                                </details>
+                                            )}
+                                        </Td>
+                                        <Td className="whitespace-nowrap align-top font-mono text-xs text-muted">{log.ip_address || '—'}</Td>
+                                    </Tr>
+                                );
+                            })}
+                        </tbody>
+                    </Table>
+                </div>
+            )}
 
-                    return (
-                        <div key={action} className="panel-card p-4 border-border/50">
-                            <div className="flex items-center gap-3 mb-2">
-                                <div className={clsx("p-2 rounded-lg", colorClass)}>
-                                    <Icon size={16} />
-                                </div>
-                                <div className="text-2xl font-bold">{count}</div>
-                            </div>
-                            <div className="text-xs text-muted uppercase tracking-wider font-bold">
-                                {action.replace('_', ' ')}
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
+            {page !== null && total > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 sm:px-6">
+                    <p className="tabular text-sm text-muted">
+                        {first}–{last} of {total}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={offset === 0 || stale}
+                            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                            icon={<ChevronLeft size={16} aria-hidden />}
+                        >
+                            Previous
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={offset + PAGE_SIZE >= total || stale}
+                            onClick={() => setOffset(offset + PAGE_SIZE)}
+                        >
+                            Next
+                            <ChevronRight size={16} aria-hidden />
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </Card>
     );
 }

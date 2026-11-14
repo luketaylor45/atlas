@@ -1,215 +1,320 @@
-import { useState, useEffect } from 'react';
+import { useId, useState, type FormEvent } from 'react';
+import { Bell, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+    Alert,
+    Badge,
+    Button,
+    Card,
+    EmptyState,
+    Field,
+    IconButton,
+    Input,
+    LoadingState,
+    Modal,
+    PageHeader,
+    Select,
+    Textarea,
+    useConfirm,
+    useToast,
+    type Tone,
+} from '../../components/ui';
 import api from '../../lib/api';
-import { Bell, Plus, Trash2, Edit3, X, Megaphone, Info, AlertTriangle } from 'lucide-react';
-import clsx from 'clsx';
+import { errorMessage } from '../../lib/errors';
+import { formatDateTime, formatRelative } from '../../lib/format';
+import type { NewsItem } from '../../lib/types';
+import { usePolling } from '../../lib/usePolling';
 
-interface NewsItem {
-    id: number;
-    title: string;
-    content: string;
-    type: string;
-    created_at: string;
+// The values are what the API stores; the dashboard reads them too.
+const newsTypes: { value: string; label: string; tone: Tone }[] = [
+    { value: 'Release', label: 'Release or update', tone: 'primary' },
+    { value: 'Status', label: 'System status', tone: 'info' },
+    { value: 'Maintenance', label: 'Maintenance', tone: 'warning' },
+];
+
+function typeInfo(type: string): { label: string; tone: Tone } {
+    return newsTypes.find((item) => item.value === type) ?? { label: type || 'General', tone: 'neutral' };
 }
 
-export default function AdminNewsPage() {
-    const [news, setNews] = useState<NewsItem[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [showModal, setShowModal] = useState(false);
+interface NewsFormErrors {
+    title?: string;
+    content?: string;
+}
 
-    // Form State
-    const [editingId, setEditingId] = useState<number | null>(null);
-    const [title, setTitle] = useState('');
-    const [content, setContent] = useState('');
-    const [type, setType] = useState('Release');
+function NewsModal({ item, onClose, onSaved }: { item: NewsItem | null; onClose: () => void; onSaved: (item: NewsItem) => void }) {
+    const toast = useToast();
+    const formId = useId();
+    const [title, setTitle] = useState(item?.title ?? '');
+    const [type, setType] = useState(item?.type || newsTypes[0].value);
+    const [content, setContent] = useState(item?.content ?? '');
+    const [errors, setErrors] = useState<NewsFormErrors>({});
+    const [formError, setFormError] = useState<string | null>(null);
+    const [saving, setSaving] = useState(false);
 
-    const fetchNews = async () => {
+    // An announcement saved with a type this form does not list keeps it.
+    const options = newsTypes.some((option) => option.value === type)
+        ? newsTypes
+        : [...newsTypes, { value: type, label: type, tone: 'neutral' as Tone }];
+
+    const submit = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (saving) return;
+
+        const problems: NewsFormErrors = {};
+        if (!title.trim()) problems.title = 'Give the announcement a title.';
+        else if (title.trim().length > 255) problems.title = 'Use at most 255 characters.';
+        if (!content.trim()) problems.content = 'Write what you want to tell your users.';
+        setErrors(problems);
+        if (problems.title || problems.content) return;
+
+        const payload = { title: title.trim(), content: content.trim(), type };
+        setSaving(true);
+        setFormError(null);
         try {
-            const res = await api.get('/news');
-            setNews(res.data);
+            const res = item
+                ? await api.put<NewsItem>(`/admin/news/${item.id}`, payload)
+                : await api.post<NewsItem>('/admin/news', payload);
+            toast.success(item ? 'Announcement saved' : 'Announcement posted');
+            onSaved(res.data);
         } catch (err) {
-            console.error(err);
-        } finally {
-            setLoading(false);
+            setFormError(errorMessage(err, item ? 'Could not save the announcement.' : 'Could not post the announcement.'));
+            setSaving(false);
         }
     };
-
-    useEffect(() => {
-        fetchNews();
-    }, []);
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        try {
-            if (editingId) {
-                await api.put(`/admin/news/${editingId}`, { title, content, type });
-            } else {
-                await api.post('/admin/news', { title, content, type });
-            }
-            setShowModal(false);
-            resetForm();
-            fetchNews();
-        } catch (err) {
-            alert("Failed to save news item");
-        }
-    };
-
-    const handleDelete = async (id: number) => {
-        if (!confirm("Delete this announcement?")) return;
-        try {
-            await api.delete(`/admin/news/${id}`);
-            fetchNews();
-        } catch (err) {
-            alert("Delete failed");
-        }
-    };
-
-    const resetForm = () => {
-        setEditingId(null);
-        setTitle('');
-        setContent('');
-        setType('Release');
-    };
-
-    const openEdit = (item: NewsItem) => {
-        setEditingId(item.id);
-        setTitle(item.title);
-        setContent(item.content);
-        setType(item.type);
-        setShowModal(true);
-    };
-
-    if (loading) return <div className="p-12 text-center animate-pulse text-muted uppercase font-bold tracking-widest mt-20">Syncing Announcements...</div>;
 
     return (
-        <div className="space-y-8 animation-enter">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-primary/5 p-8 rounded-3xl border border-primary/20">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-                        <Bell className="text-primary" size={28} /> Global Announcements
-                    </h1>
-                    <p className="text-muted text-sm font-medium mt-1 pr-10">Broadcast critical updates, maintenance notices, and milestone reachings to all platform users dashboard.</p>
-                </div>
-                <button
-                    onClick={() => { resetForm(); setShowModal(true); }}
-                    className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl font-bold text-sm hover:scale-105 transition-all shadow-lg shadow-primary/20 shrink-0"
-                >
-                    <Plus size={18} />
-                    New Broadcast
-                </button>
-            </div>
+        <Modal
+            open
+            onClose={onClose}
+            title={item ? 'Edit announcement' : 'New announcement'}
+            description="Announcements are shown to everyone on their dashboard."
+            size="lg"
+            dismissible={!saving}
+            footer={
+                <>
+                    <Button variant="ghost" onClick={onClose} disabled={saving}>
+                        Cancel
+                    </Button>
+                    <Button variant="primary" type="submit" form={formId} loading={saving}>
+                        {item ? 'Save changes' : 'Post announcement'}
+                    </Button>
+                </>
+            }
+        >
+            <form id={formId} onSubmit={submit} noValidate className="space-y-4">
+                {formError && <Alert tone="danger">{formError}</Alert>}
 
-            <div className="grid grid-cols-1 gap-4 pb-12">
-                {news.length === 0 ? (
-                    <div className="py-20 text-center panel-card border-dashed border-2">
-                        <Megaphone size={48} className="mx-auto text-muted mb-4 opacity-20" />
-                        <p className="text-muted font-bold tracking-tight">No announcements have been dispatched yet.</p>
-                    </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <Field label="Title" error={errors.title} className="sm:col-span-2">
+                        {(field) => (
+                            <Input
+                                {...field}
+                                value={title}
+                                onChange={(event) => {
+                                    setTitle(event.target.value);
+                                    setErrors((current) => ({ ...current, title: undefined }));
+                                }}
+                                placeholder="Scheduled maintenance on Sunday"
+                                maxLength={255}
+                            />
+                        )}
+                    </Field>
+
+                    <Field label="Type">
+                        {(field) => (
+                            <Select {...field} value={type} onChange={(event) => setType(event.target.value)}>
+                                {options.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </Select>
+                        )}
+                    </Field>
+                </div>
+
+                <Field label="Content" error={errors.content} hint="Plain text. Line breaks are kept.">
+                    {(field) => (
+                        <Textarea
+                            {...field}
+                            value={content}
+                            onChange={(event) => {
+                                setContent(event.target.value);
+                                setErrors((current) => ({ ...current, content: undefined }));
+                            }}
+                            rows={7}
+                        />
+                    )}
+                </Field>
+            </form>
+        </Modal>
+    );
+}
+
+type ModalState = { mode: 'create' } | { mode: 'edit'; item: NewsItem } | null;
+
+export default function AdminNewsPage() {
+    const toast = useToast();
+    const confirm = useConfirm();
+    const [news, setNews] = useState<NewsItem[] | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [modal, setModal] = useState<ModalState>(null);
+    const [deletingId, setDeletingId] = useState<number | null>(null);
+
+    const load = async () => {
+        try {
+            const res = await api.get<NewsItem[]>('/news');
+            setNews(Array.isArray(res.data) ? res.data : []);
+            setError(null);
+        } catch (err) {
+            setError(errorMessage(err, 'Could not load announcements.'));
+        }
+    };
+
+    usePolling(load, 30000);
+
+    const retry = () => {
+        setError(null);
+        void load();
+    };
+
+    const deleteItem = async (item: NewsItem) => {
+        const confirmed = await confirm({
+            title: 'Delete this announcement?',
+            description: `"${item.title}" is removed from everyone's dashboard. This cannot be undone.`,
+            confirmLabel: 'Delete announcement',
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        setDeletingId(item.id);
+        try {
+            await api.delete(`/admin/news/${item.id}`);
+            setNews((current) => current?.filter((entry) => entry.id !== item.id) ?? current);
+            toast.success('Announcement deleted');
+        } catch (err) {
+            toast.error(errorMessage(err, 'Could not delete the announcement.'));
+        } finally {
+            setDeletingId(null);
+        }
+    };
+
+    const saved = (item: NewsItem) => {
+        setNews((current) => {
+            if (!current) return current;
+            // New announcements go first, matching the API's newest-first order.
+            return current.some((entry) => entry.id === item.id)
+                ? current.map((entry) => (entry.id === item.id ? item : entry))
+                : [item, ...current];
+        });
+        setModal(null);
+    };
+
+    const header = (
+        <PageHeader
+            title="Announcements"
+            description="News shown to everyone on their dashboard."
+            actions={
+                <Button variant="primary" icon={<Plus size={16} aria-hidden />} onClick={() => setModal({ mode: 'create' })}>
+                    New announcement
+                </Button>
+            }
+        />
+    );
+
+    const modalElement = modal && (
+        <NewsModal
+            key={modal.mode === 'edit' ? modal.item.id : 'create'}
+            item={modal.mode === 'edit' ? modal.item : null}
+            onClose={() => setModal(null)}
+            onSaved={saved}
+        />
+    );
+
+    if (!news) {
+        return (
+            <>
+                {header}
+                {error ? (
+                    <Alert tone="danger" title="Could not load announcements" actions={<Button size="sm" onClick={retry}>Try again</Button>}>
+                        {error}
+                    </Alert>
                 ) : (
-                    news.map(item => (
-                        <div key={item.id} className="panel-card flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 group hover:border-primary/40 transition-all">
-                            <div className="flex items-start gap-5">
-                                <div className={clsx(
-                                    "p-3 rounded-2xl shrink-0 mt-1",
-                                    item.type === 'Release' ? "bg-primary/10 text-primary" :
-                                        item.type === 'Status' ? "bg-blue-500/10 text-blue-500" :
-                                            "bg-amber-500/10 text-amber-500"
-                                )}>
-                                    {item.type === 'Release' ? <Plus size={20} /> : item.type === 'Status' ? <Info size={20} /> : <AlertTriangle size={20} />}
-                                </div>
-                                <div>
-                                    <div className="flex items-center gap-3 mb-1">
-                                        <h3 className="font-bold text-lg leading-tight group-hover:text-primary transition-colors">{item.title}</h3>
-                                        <span className="text-[9px] font-black uppercase tracking-widest text-muted">{new Date(item.created_at).toLocaleDateString()}</span>
-                                    </div>
-                                    <p className="text-xs text-muted font-medium line-clamp-2 leading-relaxed max-w-2xl">{item.content}</p>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button
-                                    onClick={() => openEdit(item)}
-                                    className="p-2.5 hover:bg-secondary rounded-xl text-muted hover:text-foreground transition-all border border-transparent hover:border-border"
-                                >
-                                    <Edit3 size={16} />
-                                </button>
-                                <button
-                                    onClick={() => handleDelete(item.id)}
-                                    className="p-2.5 hover:bg-red-500/10 rounded-xl text-muted hover:text-red-500 transition-all border border-transparent hover:border-red-500/20"
-                                >
-                                    <Trash2 size={16} />
-                                </button>
-                            </div>
-                        </div>
-                    ))
+                    <LoadingState label="Loading announcements…" />
                 )}
+                {modalElement}
+            </>
+        );
+    }
+
+    return (
+        <>
+            {header}
+
+            <div className="space-y-4">
+                {error && (
+                    <Alert tone="warning" title="Could not refresh" actions={<Button size="sm" onClick={retry}>Try again</Button>}>
+                        {error} Showing the last list received.
+                    </Alert>
+                )}
+
+                <Card flush>
+                    {news.length === 0 ? (
+                        <EmptyState
+                            icon={<Bell size={18} aria-hidden />}
+                            title="No announcements yet"
+                            description="Post one to tell your users about updates, maintenance or outages."
+                            action={<Button onClick={() => setModal({ mode: 'create' })}>New announcement</Button>}
+                        />
+                    ) : (
+                        <ul className="divide-y divide-border">
+                            {news.map((item) => {
+                                const info = typeInfo(item.type);
+                                return (
+                                    <li key={item.id} className="flex items-start gap-3 px-5 py-4 sm:px-6">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                                <h2 className="min-w-0 break-words text-sm font-medium text-foreground">{item.title}</h2>
+                                                <Badge tone={info.tone}>{info.label}</Badge>
+                                            </div>
+                                            <time
+                                                dateTime={item.created_at}
+                                                title={formatDateTime(item.created_at)}
+                                                className="mt-0.5 block text-xs text-muted"
+                                            >
+                                                {formatRelative(item.created_at)}
+                                            </time>
+                                            <p className="mt-2 line-clamp-2 whitespace-pre-line break-words text-sm text-muted">
+                                                {item.content}
+                                            </p>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-1">
+                                            <IconButton
+                                                label={`Edit ${item.title}`}
+                                                size="sm"
+                                                disabled={deletingId === item.id}
+                                                onClick={() => setModal({ mode: 'edit', item })}
+                                            >
+                                                <Pencil size={16} aria-hidden />
+                                            </IconButton>
+                                            <IconButton
+                                                label={`Delete ${item.title}`}
+                                                size="sm"
+                                                className="hover:bg-danger/10 hover:text-danger"
+                                                loading={deletingId === item.id}
+                                                onClick={() => void deleteItem(item)}
+                                            >
+                                                <Trash2 size={16} aria-hidden />
+                                            </IconButton>
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </Card>
             </div>
 
-            {showModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-                    <div className="panel-card max-w-2xl w-full p-0 shadow-2xl animation-enter overflow-hidden">
-                        <div className="px-8 py-6 border-b border-border/50 bg-secondary/20 flex items-center justify-between">
-                            <h2 className="text-xl font-bold tracking-tight">{editingId ? 'Edit Announcement' : 'Compose Broadcast'}</h2>
-                            <button onClick={() => setShowModal(false)} className="p-2 hover:bg-secondary rounded-lg transition-colors">
-                                <X size={20} className="text-muted" />
-                            </button>
-                        </div>
-
-                        <form onSubmit={handleSubmit} className="p-8 space-y-6">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-muted ml-1">Headline</label>
-                                    <input
-                                        required
-                                        value={title}
-                                        onChange={e => setTitle(e.target.value)}
-                                        className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-medium"
-                                        placeholder="Brief, punchy title"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-muted ml-1">Category</label>
-                                    <select
-                                        value={type}
-                                        onChange={e => setType(e.target.value)}
-                                        className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-bold appearance-none cursor-pointer"
-                                    >
-                                        <option value="Release">Release / Update</option>
-                                        <option value="Status">System Status</option>
-                                        <option value="Maintenance">Maintenance</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold uppercase tracking-widest text-muted ml-1">Body Content</label>
-                                <textarea
-                                    required
-                                    rows={5}
-                                    value={content}
-                                    onChange={e => setContent(e.target.value)}
-                                    className="w-full bg-secondary/50 border border-border rounded-2xl px-4 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-medium resize-none"
-                                    placeholder="Detailed information for the users. Supports plain text."
-                                />
-                            </div>
-
-                            <div className="flex gap-4 pt-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setShowModal(false)}
-                                    className="flex-1 px-6 py-3 rounded-xl bg-secondary hover:bg-secondary/80 text-sm font-bold transition-all"
-                                >
-                                    Discard Changes
-                                </button>
-                                <button
-                                    type="submit"
-                                    className="flex-1 px-6 py-3 rounded-xl bg-primary text-white hover:opacity-90 text-sm font-bold shadow-lg shadow-primary/20 transition-all"
-                                >
-                                    Dispatch Announcement
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
-        </div>
+            {modalElement}
+        </>
     );
 }

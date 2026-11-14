@@ -1,322 +1,292 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Trash2, UserPlus, Users } from 'lucide-react';
 import api from '../../lib/api';
-import { Users, Plus, Shield, Terminal, FileText, Settings, Zap, Key, Trash2, AlertTriangle, CheckCircle } from 'lucide-react';
-import clsx from 'clsx';
+import { errorMessage, errorStatus } from '../../lib/errors';
+import { formatDateTime, formatRelative } from '../../lib/format';
+import type { ServicePermissions, ServiceUser } from '../../lib/types';
+import {
+    Alert,
+    Button,
+    Card,
+    CardHeader,
+    CopyButton,
+    EmptyState,
+    Field,
+    IconButton,
+    Input,
+    LoadingState,
+    Switch,
+    useConfirm,
+    useToast,
+} from '../../components/ui';
 
-interface ServiceUser {
-    id: number;
-    user_id: number;
-    can_view_console: boolean;
-    can_send_commands: boolean;
-    can_manage_files: boolean;
-    can_edit_startup: boolean;
-    can_control_power: boolean;
-    can_access_sftp: boolean;
-    created_at: string;
-    user?: {
-        username: string;
+type PermissionKey = keyof ServicePermissions;
+
+const permissionList: { key: PermissionKey; label: string; description: string }[] = [
+    { key: 'can_view_console', label: 'View console', description: 'See the live console output and resource use.' },
+    { key: 'can_send_commands', label: 'Send commands', description: 'Type commands into the server console.' },
+    { key: 'can_control_power', label: 'Control power', description: 'Start, stop, restart and kill the server, and rebuild or reinstall it.' },
+    { key: 'can_manage_files', label: 'Manage files', description: 'Browse, edit, upload and delete files in the panel.' },
+    { key: 'can_edit_startup', label: 'Edit startup', description: 'Change the startup variables.' },
+    { key: 'can_access_sftp', label: 'SFTP access', description: 'Connect to the server files with an SFTP client.' },
+];
+
+const defaultPermissions: ServicePermissions = {
+    can_view_console: true,
+    can_send_commands: false,
+    can_manage_files: false,
+    can_edit_startup: false,
+    can_control_power: false,
+    can_access_sftp: false,
+};
+
+function pickPermissions(user: ServicePermissions): ServicePermissions {
+    return {
+        can_view_console: Boolean(user.can_view_console),
+        can_send_commands: Boolean(user.can_send_commands),
+        can_manage_files: Boolean(user.can_manage_files),
+        can_edit_startup: Boolean(user.can_edit_startup),
+        can_control_power: Boolean(user.can_control_power),
+        can_access_sftp: Boolean(user.can_access_sftp),
     };
 }
 
-export default function ServiceUsersTab() {
-    const { uuid } = useParams();
-    const [users, setUsers] = useState<ServiceUser[]>([]);
-    const [allUsers, setAllUsers] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [showAddModal, setShowAddModal] = useState(false);
-    const [selectedUser, setSelectedUser] = useState<number>(0);
-    const [sftpPassword, setSftpPassword] = useState('');
-    const [permissions, setPermissions] = useState({
-        can_view_console: true,
-        can_send_commands: false,
-        can_manage_files: false,
-        can_edit_startup: false,
-        can_control_power: false,
-        can_access_sftp: false,
-    });
+export default function ServiceUsersTab({ uuid }: { uuid: string }) {
+    const toast = useToast();
+    const confirm = useConfirm();
+
+    const [users, setUsers] = useState<ServiceUser[] | null>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [reloadKey, setReloadKey] = useState(0);
+    const [savingId, setSavingId] = useState<number | null>(null);
+
+    const [username, setUsername] = useState('');
+    const [usernameError, setUsernameError] = useState('');
+    const [permissions, setPermissions] = useState<ServicePermissions>(defaultPermissions);
+    const [adding, setAdding] = useState(false);
 
     useEffect(() => {
-        fetchServiceUsers();
-        fetchAllUsers();
-    }, [uuid]);
+        let cancelled = false;
+        void (async () => {
+            try {
+                const res = await api.get<ServiceUser[]>(`/services/${uuid}/users`);
+                if (cancelled) return;
+                setUsers(Array.isArray(res.data) ? res.data : []);
+                setLoadError(null);
+            } catch (err) {
+                if (!cancelled) setLoadError(errorMessage(err, 'Could not load the sub-users.'));
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [uuid, reloadKey]);
 
-    const fetchServiceUsers = async () => {
+    const sftpPrefix = uuid.substring(0, 8);
+    const nameOf = (user: ServiceUser) => user.user?.username || `User #${user.user_id}`;
+
+    const togglePermission = async (user: ServiceUser, key: PermissionKey, value: boolean) => {
+        const next = { ...pickPermissions(user), [key]: value };
+        setSavingId(user.user_id);
+        // Show the change at once; put it back if the save fails.
+        setUsers((current) => current?.map((entry) => (entry.user_id === user.user_id ? { ...entry, ...next } : entry)) ?? current);
         try {
-            const res = await api.get(`/services/${uuid}/users`);
-            setUsers(res.data);
+            await api.put(`/services/${uuid}/users/${user.user_id}`, next);
         } catch (err) {
-            console.error('Failed to fetch service users', err);
+            setUsers((current) => current?.map((entry) => (entry.user_id === user.user_id ? { ...entry, [key]: !value } : entry)) ?? current);
+            toast.error(errorMessage(err, `Could not update the permissions for ${nameOf(user)}.`));
         } finally {
-            setLoading(false);
+            setSavingId(null);
         }
     };
 
-    const fetchAllUsers = async () => {
+    const remove = async (user: ServiceUser) => {
+        const confirmed = await confirm({
+            title: `Remove ${nameOf(user)}?`,
+            description: 'They lose access to this server in the panel and over SFTP straight away. Their Atlas account is not affected.',
+            confirmLabel: 'Remove sub-user',
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        setSavingId(user.user_id);
         try {
-            const res = await api.get('/admin/users');
-            setAllUsers(res.data);
+            await api.delete(`/services/${uuid}/users/${user.user_id}`);
+            setUsers((current) => current?.filter((entry) => entry.user_id !== user.user_id) ?? current);
+            toast.success(`${nameOf(user)} was removed.`);
         } catch (err) {
-            console.error('Failed to fetch users', err);
+            toast.error(errorMessage(err, `Could not remove ${nameOf(user)}.`));
+        } finally {
+            setSavingId(null);
         }
     };
 
-    const handleAddUser = async () => {
-        if (!selectedUser || !sftpPassword) {
-            alert('Please select a user and enter an SFTP password');
+    const add = async (event: FormEvent) => {
+        event.preventDefault();
+        const name = username.trim();
+        if (!name) {
+            setUsernameError('Enter the Atlas username of the person to add.');
             return;
         }
 
+        setAdding(true);
+        setUsernameError('');
         try {
-            await api.post(`/services/${uuid}/users`, {
-                user_id: selectedUser,
-                sftp_password: sftpPassword,
-                ...permissions
-            });
-
-            setShowAddModal(false);
-            setSftpPassword('');
-            setSelectedUser(0);
-            setPermissions({
-                can_view_console: true,
-                can_send_commands: false,
-                can_manage_files: false,
-                can_edit_startup: false,
-                can_control_power: false,
-                can_access_sftp: false,
-            });
-            fetchServiceUsers();
-        } catch (err: any) {
-            alert(err.response?.data?.error || 'Failed to add user');
-        }
-    };
-
-    const handleRemoveUser = async (userId: number) => {
-        if (!confirm('Remove this user\'s access to the service?')) return;
-
-        try {
-            await api.delete(`/services/${uuid}/users/${userId}`);
-            fetchServiceUsers();
+            const res = await api.post<ServiceUser>(`/services/${uuid}/users`, { username: name, ...permissions });
+            setUsers((current) => [...(current ?? []), res.data]);
+            setUsername('');
+            setPermissions(defaultPermissions);
+            toast.success(`${res.data.user?.username || name} was added.`);
         } catch (err) {
-            alert('Failed to remove user');
+            const message = errorMessage(err, 'Could not add the sub-user.');
+            const status = errorStatus(err);
+            // These are all about the username that was typed.
+            if (status === 404 || status === 409 || status === 403 || status === 400) {
+                setUsernameError(message);
+            } else {
+                toast.error(message);
+            }
+        } finally {
+            setAdding(false);
         }
     };
-
-    const generatePassword = () => {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
-        let password = '';
-        for (let i = 0; i < 16; i++) {
-            password += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        setSftpPassword(password);
-    };
-
-    const permissionIcons: Record<string, any> = {
-        can_view_console: Terminal,
-        can_send_commands: Zap,
-        can_manage_files: FileText,
-        can_edit_startup: Settings,
-        can_control_power: Shield,
-        can_access_sftp: Key,
-    };
-
-    const permissionLabels: Record<string, string> = {
-        can_view_console: 'View Console',
-        can_send_commands: 'Send Commands',
-        can_manage_files: 'Manage Files',
-        can_edit_startup: 'Edit Startup',
-        can_control_power: 'Control Power',
-        can_access_sftp: 'SFTP Access',
-    };
-
-    if (loading) return <div className="p-12 text-center text-muted animate-pulse">Loading sub-users...</div>;
 
     return (
-        <div className="space-y-8">
-            {/* Add Modal */}
-            {showAddModal && (
-                <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm animate-in">
-                    <div className="panel-card max-w-2xl w-full border-primary/20 shadow-2xl">
-                        <div className="flex items-center gap-4 text-primary mb-8">
-                            <Users size={32} />
-                            <h2 className="text-2xl font-bold tracking-tight">Add Sub-User</h2>
-                        </div>
+        <div className="space-y-6">
+            <Card flush>
+                <CardHeader
+                    title="Sub-users"
+                    description="People you have given access to this server, and what each of them may do. Changes save as you make them."
+                    className="mb-0 px-5 pt-5 sm:px-6 sm:pt-6"
+                />
 
-                        <div className="space-y-6">
-                            <div className="space-y-3">
-                                <label className="text-xs font-bold text-muted uppercase tracking-widest">Select User</label>
-                                <select
-                                    value={selectedUser}
-                                    onChange={(e) => setSelectedUser(parseInt(e.target.value))}
-                                    className="input-field"
-                                >
-                                    <option value={0}>Choose a user...</option>
-                                    {allUsers.filter(u => !users.some(su => su.user_id === u.id)).map(user => (
-                                        <option key={user.id} value={user.id}>{user.username}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="space-y-3">
-                                <label className="text-xs font-bold text-muted uppercase tracking-widest">SFTP Password</label>
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={sftpPassword}
-                                        onChange={(e) => setSftpPassword(e.target.value)}
-                                        className="input-field flex-1"
-                                        placeholder="Enter secure password..."
-                                    />
-                                    <button
-                                        onClick={generatePassword}
-                                        className="px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:bg-primary/90 transition-all"
-                                    >
-                                        Generate
-                                    </button>
-                                </div>
-                                <p className="text-xs text-muted">This password is used for SFTP connections only. Minimum 8 characters.</p>
-                            </div>
-
-                            <div className="space-y-3">
-                                <label className="text-xs font-bold text-muted uppercase tracking-widest">Permissions</label>
-                                <div className="grid grid-cols-2 gap-3">
-                                    {Object.keys(permissions).map(key => {
-                                        const Icon = permissionIcons[key];
-                                        return (
-                                            <label
-                                                key={key}
-                                                className={clsx(
-                                                    "flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all",
-                                                    permissions[key as keyof typeof permissions]
-                                                        ? "border-primary bg-primary/5"
-                                                        : "border-border hover:border-primary/30"
-                                                )}
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={permissions[key as keyof typeof permissions]}
-                                                    onChange={(e) => setPermissions({ ...permissions, [key]: e.target.checked })}
-                                                    className="hidden"
-                                                />
-                                                <Icon size={18} className={permissions[key as keyof typeof permissions] ? "text-primary" : "text-muted"} />
-                                                <span className="text-sm font-bold">{permissionLabels[key]}</span>
-                                            </label>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-3 mt-8">
-                            <button
-                                onClick={() => setShowAddModal(false)}
-                                className="flex-1 px-6 py-3 rounded-xl font-bold bg-secondary hover:bg-secondary/80 transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleAddUser}
-                                disabled={!selectedUser || !sftpPassword}
-                                className="flex-1 px-6 py-3 rounded-xl font-bold bg-primary text-white hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-primary/20"
-                            >
-                                Add Sub-User
-                            </button>
-                        </div>
+                {loadError && (
+                    <div className="px-5 pt-4 sm:px-6">
+                        <Alert
+                            tone="danger"
+                            title="The sub-users could not be loaded"
+                            actions={
+                                <Button size="sm" variant="outline" onClick={() => setReloadKey((key) => key + 1)}>
+                                    Try again
+                                </Button>
+                            }
+                        >
+                            {loadError}
+                        </Alert>
                     </div>
-                </div>
-            )}
+                )}
 
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h3 className="text-2xl font-bold tracking-tight flex items-center gap-3">
-                        <Users className="text-primary" size={28} /> Sub-Users
-                    </h3>
-                    <p className="text-muted text-sm mt-1">Manage user access and permissions for this service</p>
-                </div>
-                <button
-                    onClick={() => setShowAddModal(true)}
-                    className="btn-primary flex items-center gap-2"
-                >
-                    <Plus size={18} /> Add Sub-User
-                </button>
-            </div>
-
-            {/* Users Grid */}
-            {users.length === 0 ? (
-                <div className="panel-card p-12 text-center border-dashed border-2">
-                    <Users size={48} className="mx-auto text-muted/30 mb-4" />
-                    <h4 className="font-bold text-lg mb-2">No Sub-Users</h4>
-                    <p className="text-sm text-muted mb-6">Grant other users access to this service with custom permissions</p>
-                    <button
-                        onClick={() => setShowAddModal(true)}
-                        className="btn-primary inline-flex items-center gap-2"
-                    >
-                        <Plus size={18} /> Add First Sub-User
-                    </button>
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {users.map(user => (
-                        <div key={user.id} className="panel-card p-6 border-border">
-                            <div className="flex items-start justify-between mb-6">
-                                <div className="flex items-center gap-4">
-                                    <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
-                                        <Users size={24} />
+                {users === null ? (
+                    loadError ? (
+                        <div className="pb-5" />
+                    ) : (
+                        <LoadingState label="Loading sub-users…" />
+                    )
+                ) : users.length === 0 ? (
+                    <EmptyState
+                        icon={<Users size={18} aria-hidden />}
+                        title="No sub-users yet"
+                        description="Add someone below by their Atlas username to share this server with them."
+                    />
+                ) : (
+                    <ul className="mt-5 divide-y divide-border border-t border-border">
+                        {users.map((user) => {
+                            const name = nameOf(user);
+                            const sftpUsername = user.user?.username ? `${sftpPrefix}.${user.user.username}` : '';
+                            const busy = savingId === user.user_id;
+                            return (
+                                <li key={user.id} className="px-5 py-5 sm:px-6">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-medium text-foreground">{name}</p>
+                                            <p className="mt-0.5 text-xs text-muted" title={formatDateTime(user.created_at)}>
+                                                Added {formatRelative(user.created_at)}
+                                            </p>
+                                            {user.can_access_sftp && sftpUsername && (
+                                                <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted">
+                                                    SFTP username
+                                                    <code className="break-all font-mono text-foreground">{sftpUsername}</code>
+                                                    <CopyButton value={sftpUsername} label="Copy SFTP username" />
+                                                </p>
+                                            )}
+                                        </div>
+                                        <IconButton
+                                            label={`Remove ${name}`}
+                                            variant="danger-outline"
+                                            size="sm"
+                                            disabled={busy}
+                                            onClick={() => remove(user)}
+                                        >
+                                            <Trash2 size={16} aria-hidden />
+                                        </IconButton>
                                     </div>
-                                    <div>
-                                        <h4 className="font-bold text-lg">{user.user?.username || `User #${user.user_id}`}</h4>
-                                        <p className="text-xs text-muted">Added {new Date(user.created_at).toLocaleDateString()}</p>
+                                    <div className="mt-3 grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+                                        {permissionList.map((permission) => (
+                                            <Switch
+                                                key={permission.key}
+                                                label={permission.label}
+                                                checked={Boolean(user[permission.key])}
+                                                disabled={busy}
+                                                onChange={(value) => togglePermission(user, permission.key, value)}
+                                            />
+                                        ))}
                                     </div>
-                                </div>
-                                <button
-                                    onClick={() => handleRemoveUser(user.user_id)}
-                                    className="p-2 hover:bg-red-500/10 text-red-500 rounded-lg transition-all"
-                                    title="Remove Access"
-                                >
-                                    <Trash2 size={18} />
-                                </button>
-                            </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+            </Card>
 
-                            <div className="space-y-2">
-                                <div className="text-xs font-bold text-muted uppercase tracking-widest mb-3">Permissions</div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {Object.keys(permissions).map(key => {
-                                        const Icon = permissionIcons[key];
-                                        const hasPermission = user[key as keyof ServiceUser];
-                                        return (
-                                            <div
-                                                key={key}
-                                                className={clsx(
-                                                    "flex items-center gap-2 p-2 rounded-lg text-xs font-medium",
-                                                    hasPermission ? "bg-emerald-500/10 text-emerald-500" : "bg-secondary text-muted"
-                                                )}
-                                            >
-                                                {hasPermission ? <CheckCircle size={14} /> : <Icon size={14} className="opacity-30" />}
-                                                <span>{permissionLabels[key]}</span>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
+            <Card>
+                <CardHeader title="Add a sub-user" description="The person needs an Atlas account first. Enter their username exactly." />
+                <form onSubmit={add} className="space-y-5">
+                    <Field label="Username" error={usernameError || undefined} className="max-w-sm">
+                        {(field) => (
+                            <Input
+                                {...field}
+                                value={username}
+                                onChange={(event) => {
+                                    setUsername(event.target.value);
+                                    setUsernameError('');
+                                }}
+                                placeholder="Their Atlas username"
+                                autoComplete="off"
+                                autoCapitalize="off"
+                                spellCheck={false}
+                                maxLength={32}
+                            />
+                        )}
+                    </Field>
+
+                    <fieldset>
+                        <legend className="text-sm font-medium text-foreground">Permissions</legend>
+                        <div className="mt-2 grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2">
+                            {permissionList.map((permission) => (
+                                <Switch
+                                    key={permission.key}
+                                    label={permission.label}
+                                    description={permission.description}
+                                    checked={permissions[permission.key]}
+                                    onChange={(value) => setPermissions((current) => ({ ...current, [permission.key]: value }))}
+                                />
+                            ))}
                         </div>
-                    ))}
-                </div>
-            )}
+                    </fieldset>
 
-            {/* Info Card */}
-            <div className="panel-card p-6 bg-blue-500/5 border-blue-500/20">
-                <div className="flex gap-4">
-                    <AlertTriangle size={24} className="text-blue-500 shrink-0" />
-                    <div className="space-y-2">
-                        <h4 className="font-bold text-sm">About Sub-Users</h4>
-                        <p className="text-xs text-muted leading-relaxed">
-                            Sub-users can access this service based on the permissions you grant. Each user gets their own SFTP password.
-                            They can log in to SFTP using their Atlas username and the password you set here. All actions are logged in the Activity tab.
-                        </p>
+                    <Alert tone="info" title="SFTP uses their own Atlas password">
+                        There is no separate SFTP password to set. With SFTP access switched on, they sign in with the username{' '}
+                        <code className="break-all font-mono text-foreground">{sftpPrefix}.their-username</code> and the password of their Atlas
+                        account.
+                    </Alert>
+
+                    <div className="flex justify-end">
+                        <Button type="submit" variant="primary" loading={adding} icon={<UserPlus size={16} aria-hidden />}>
+                            Add sub-user
+                        </Button>
                     </div>
-                </div>
-            </div>
+                </form>
+            </Card>
         </div>
     );
 }

@@ -40,3 +40,12 @@ export function expireAuthSession() {
     clearStoredAuth();
     window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
 }
+
+/** Replaces the saved user, keeping the token where it already lives. */
+export function updateStoredUser(user: string) {
+    for (const storage of [localStorage, sessionStorage]) {
+        if (storage.getItem(TOKEN_KEY)) {
+            storage.setItem(USER_KEY, user);
+        }
+    }
+}

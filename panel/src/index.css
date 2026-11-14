@@ -1,104 +1,180 @@
 @import "tailwindcss";
 
-@variant dark (&:where(.dark, .dark *));
+/* The dark variant follows the theme attribute set by ThemeProvider. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-:root {
-  --background: #fbfbfd;
-  --foreground: #1d1d1f;
-  --primary: #4f46e5;
-  --secondary: #f5f5f7;
-  --muted: #86868b;
+/*
+ * Design tokens.
+ *
+ * The accent (--primary) is the same indigo in both themes. Surfaces, text
+ * and status colours change with the theme so each keeps its contrast.
+ * --primary-text is the accent used as text or icon colour: it is tuned per
+ * theme because one indigo cannot be readable on both white and near-black.
+ */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --background: #f6f6f8;
   --card: #ffffff;
-  --card-foreground: #1d1d1f;
-  --border: #e2e2e7;
-  --accent: #4338ca;
-  --radius: 12px;
+  --secondary: #f0f0f3;
+  --border: #e3e3e8;
+  --border-strong: #cfcfd7;
+
+  --foreground: #16161a;
+  --muted: #5d5d69;
+  --subtle: #8b8b97;
+
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-foreground: #ffffff;
+  --primary-text: #4338ca;
+
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #dc2626;
+  --info: #2563eb;
+
+  --shadow-card: 0 1px 2px rgb(16 16 24 / 0.04), 0 1px 1px rgb(16 16 24 / 0.03);
+  --shadow-pop: 0 12px 32px rgb(16 16 24 / 0.14), 0 2px 6px rgb(16 16 24 / 0.08);
 }
 
-.dark {
-  --background: #020203;
-  --foreground: #f5f5f7;
-  --primary: #6366f1;
-  --secondary: #111113;
-  --muted: #71717a;
-  --card: #09090b;
-  --card-foreground: #f5f5f7;
-  --border: #1a1a1c;
-  --accent: #818cf8;
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0a0a0d;
+  --card: #111115;
+  --secondary: #19191e;
+  --border: #25252b;
+  --border-strong: #34343c;
+
+  --foreground: #ededf1;
+  --muted: #9c9ca8;
+  --subtle: #6c6c78;
+
+  --primary: #4f46e5;
+  --primary-hover: #5b53ea;
+  --primary-foreground: #ffffff;
+  --primary-text: #a5b0ff;
+
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+/* The console and code views stay dark in both themes, like a terminal. */
+:root {
+  --terminal: #0b0c10;
+  --terminal-foreground: #d6d8e0;
+  --terminal-muted: #7a7d8c;
+  --terminal-border: #1f2028;
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-primary: var(--primary);
-  --color-secondary: var(--secondary);
-  --color-muted: var(--muted);
   --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
+  --color-secondary: var(--secondary);
   --color-border: var(--border);
-  --color-accent: var(--accent);
-  --radius-xl: 18px;
-  --font-sans: "Inter", "Outfit", "Plus Jakarta Sans", -apple-system, sans-serif;
+  --color-border-strong: var(--border-strong);
 
-  --animate-in: fade-in 0.2s ease-out;
-  --animate-scale: scale-up 0.15s ease-out;
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-text: var(--primary-text);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --color-terminal: var(--terminal);
+  --color-terminal-foreground: var(--terminal-foreground);
+  --color-terminal-muted: var(--terminal-muted);
+  --color-terminal-border: var(--terminal-border);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+
+  --radius-control: 8px;
+  --radius-card: 12px;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --animate-fade-in: fade-in 0.18s ease-out;
+  --animate-pop-in: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-in: slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 
   @keyframes fade-in {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
 
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateX(16px); }
+    to { opacity: 1; transform: translateX(0); }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans);
-  overflow-x: hidden;
-  -webkit-font-smoothing: antialiased;
-  letter-spacing: -0.01em;
-}
-
-@layer components {
-  .glass {
-    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
   }
 
-  .panel-card {
-    @apply bg-card/60 border border-border/80 rounded-2xl p-6 transition-all duration-200;
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
   }
 
-  .panel-card-hover {
-    @apply hover:border-primary/40 hover:bg-card/80 hover:shadow-2xl hover:shadow-primary/5 cursor-pointer;
+  /* One consistent, visible keyboard focus ring. */
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
-  .icon-box {
-    @apply p-3.5 rounded-xl bg-secondary/80 text-primary border border-border/50 transition-all;
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 30%, transparent);
   }
 
-  .input-field {
-    @apply w-full bg-secondary/80 border border-border/50 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-muted/50;
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary {
+    cursor: pointer;
   }
 
-  .btn-primary {
-    @apply px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:brightness-110 active:scale-95 transition-all;
-  }
-
-  .animation-enter {
-    animation: fade-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  /* Numbers in tables and stats line up. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
 }
 
-/* Scrollbar refinement */
+/* Thin, theme-aware scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -106,10 +182,24 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--border-strong);
   border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
+  background: var(--subtle);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

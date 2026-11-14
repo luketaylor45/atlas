@@ -1,108 +1,140 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import api from '../../lib/api';
-import Logo from '../../components/Logo';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
+import AuthShell, { PasswordInput } from '../../components/AuthShell';
+import { Alert, Button, Field, Input, LoadingState } from '../../components/ui';
 import { useAuth } from '../../context/auth';
+import api from '../../lib/api';
+import { errorMessage, errorStatus } from '../../lib/errors';
+import {
+    PASSWORD_HINT,
+    USERNAME_HINT,
+    useSetupStatus,
+    validateConfirmation,
+    validatePassword,
+    validateUsername,
+    type AuthResponse,
+} from '../auth/account';
 
+interface FieldErrors {
+    username?: string;
+    password?: string;
+    confirmation?: string;
+}
+
+/** First-run page: creates the administrator account. */
 export default function SetupPage() {
     const navigate = useNavigate();
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
     const { user, login } = useAuth();
+    const { status, loading } = useSetupStatus();
 
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [confirmation, setConfirmation] = useState('');
+    const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+    const [error, setError] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    const alreadySetUp = status?.setup_required === false;
     useEffect(() => {
-        if (user) {
-            navigate('/');
-            return;
-        }
+        if (alreadySetUp) navigate('/login', { replace: true });
+    }, [alreadySetUp, navigate]);
 
-        api.get('/auth/setup-status')
-            .then(res => {
-                if (!res.data.setup_required) {
-                    navigate('/login');
-                }
-            })
-            .catch(() => { });
-    }, [navigate, user]);
+    if (user) {
+        return <Navigate to="/" replace />;
+    }
 
-    const handleSetup = async (e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
+    if (loading || alreadySetUp) {
+        return (
+            <AuthShell title="Set up Atlas">
+                <LoadingState className="py-8" />
+            </AuthShell>
+        );
+    }
+
+    const handleSubmit = async (event: FormEvent) => {
+        event.preventDefault();
         setError('');
-        setLoading(true);
 
-        const formData = new FormData(e.currentTarget);
-        const username = formData.get('username') as string;
-        const password = formData.get('password') as string;
+        const name = username.trim();
+        const problems: FieldErrors = {
+            username: validateUsername(name),
+            password: validatePassword(password),
+            confirmation: validateConfirmation(password, confirmation),
+        };
+        setFieldErrors(problems);
+        if (problems.username || problems.password || problems.confirmation) return;
 
+        setSubmitting(true);
         try {
-            const res = await api.post('/auth/setup', { username, password });
-
-            // Auto login if token provided
+            const res = await api.post<Partial<AuthResponse>>('/auth/setup', { username: name, password });
             if (res.data.token && res.data.user) {
                 login(res.data.token, res.data.user);
-                navigate('/');
             } else {
-                navigate('/login');
+                navigate('/login', { replace: true });
             }
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Setup failed');
+        } catch (err) {
+            if (errorStatus(err) === 403) {
+                // Someone else finished setup first.
+                navigate('/login', { replace: true });
+                return;
+            }
+            setError(errorMessage(err, 'Could not finish setup. Please try again.'));
         } finally {
-            setLoading(false);
+            setSubmitting(false);
         }
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-background text-foreground font-sans dark relative overflow-hidden">
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-emerald-500/10 rounded-full blur-[120px] pointer-events-none" />
+        <AuthShell
+            title="Set up Atlas"
+            description="Create the administrator account. It has full control of this panel: nodes, servers and other people's accounts."
+        >
+            <form onSubmit={handleSubmit} noValidate className="space-y-4">
+                {error && <Alert tone="danger">{error}</Alert>}
 
-            <div className="w-full max-w-md p-8 glass rounded-2xl border border-border/50 shadow-2xl relative z-10">
-                <div className="flex flex-col items-center mb-8">
-                    <Logo size="lg" className="mb-2" />
-                    <h1 className="text-2xl font-bold tracking-tight">System Setup</h1>
-                    <p className="text-muted text-sm mt-2">Create your Root Administrator account</p>
-                </div>
-
-                {error && (
-                    <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-lg text-sm text-center mb-4">
-                        {error}
-                    </div>
-                )}
-
-                <form onSubmit={handleSetup} className="flex flex-col gap-5">
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Admin Username</label>
-                        <input
+                <Field label="Username" hint={USERNAME_HINT} error={fieldErrors.username}>
+                    {(field) => (
+                        <Input
+                            {...field}
                             name="username"
-                            type="text"
-                            required
-                            minLength={3}
-                            className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="admin"
+                            autoComplete="username"
+                            autoCapitalize="none"
+                            spellCheck={false}
+                            autoFocus
+                            value={username}
+                            onChange={(event) => setUsername(event.target.value)}
                         />
-                    </div>
+                    )}
+                </Field>
 
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted">Password</label>
-                        <input
+                <Field label="Password" hint={PASSWORD_HINT} error={fieldErrors.password}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
                             name="password"
-                            type="password"
-                            required
-                            minLength={8}
-                            className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted/50"
-                            placeholder="••••••••"
+                            autoComplete="new-password"
+                            value={password}
+                            onChange={(event) => setPassword(event.target.value)}
                         />
-                    </div>
+                    )}
+                </Field>
 
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-emerald-500 text-white font-semibold py-3 rounded-lg hover:bg-emerald-600 transition-colors mt-2 disabled:opacity-50"
-                    >
-                        {loading ? 'Configuring System...' : 'Create Administrator'}
-                    </button>
-                </form>
-            </div>
-        </div>
+                <Field label="Confirm password" error={fieldErrors.confirmation}>
+                    {(field) => (
+                        <PasswordInput
+                            {...field}
+                            name="confirm-password"
+                            autoComplete="new-password"
+                            value={confirmation}
+                            onChange={(event) => setConfirmation(event.target.value)}
+                        />
+                    )}
+                </Field>
+
+                <Button type="submit" variant="primary" size="lg" fullWidth loading={submitting}>
+                    Create administrator account
+                </Button>
+            </form>
+        </AuthShell>
     );
 }
