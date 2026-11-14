@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -183,9 +184,16 @@ func reconcileStatusAfterPowerFailure(ctx context.Context, uuid string) {
 	NotifyStatus(uuid, status)
 }
 
-func containerHasNetwork(networks map[string]*network.EndpointSettings, networkName string) bool {
+// containerHasNetwork reports whether a container is set up to join a
+// network. Docker only fills in the network ID once a container has started,
+// so a container that was created but never run has a configured endpoint
+// with an empty ID. That is normal and is not a container needing repair.
+func containerHasNetwork(networks map[string]*network.EndpointSettings, networkName string, running bool) bool {
 	endpoint, ok := networks[networkName]
-	return ok && endpoint != nil && endpoint.NetworkID != ""
+	if !ok || endpoint == nil {
+		return false
+	}
+	return endpoint.NetworkID != "" || !running
 }
 
 func ensureContainerNetwork(ctx context.Context, uuid string) (bool, error) {
@@ -193,7 +201,8 @@ func ensureContainerNetwork(ctx context.Context, uuid string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("inspect server container network: %w", err)
 	}
-	if inspect.NetworkSettings != nil && containerHasNetwork(inspect.NetworkSettings.Networks, defaultServerNetwork) {
+	running := inspect.State != nil && inspect.State.Running
+	if inspect.NetworkSettings != nil && containerHasNetwork(inspect.NetworkSettings.Networks, defaultServerNetwork, running) {
 		return false, nil
 	}
 
@@ -216,7 +225,7 @@ func ensureContainerNetwork(ctx context.Context, uuid string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("verify server container network: %w", err)
 	}
-	if inspect.NetworkSettings == nil || !containerHasNetwork(inspect.NetworkSettings.Networks, defaultServerNetwork) {
+	if inspect.NetworkSettings == nil || !containerHasNetwork(inspect.NetworkSettings.Networks, defaultServerNetwork, false) {
 		return false, fmt.Errorf("Docker did not create a %s network endpoint for the server container", defaultServerNetwork)
 	}
 	return true, nil
@@ -499,7 +508,7 @@ func HandleSendCommand(c *gin.Context) {
 	}
 
 	if err := sendConsoleCommand(c.Request.Context(), uuid, req.Command); err != nil {
-		if errdefs.IsNotFound(err) || errdefs.IsConflict(err) {
+		if errors.Is(err, errServerNotRunning) || errdefs.IsNotFound(err) || errdefs.IsConflict(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "The server is not running"})
 			return
 		}

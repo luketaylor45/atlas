@@ -82,24 +82,43 @@ func TestContainerHasNetwork(t *testing.T) {
 	tests := []struct {
 		name     string
 		networks map[string]*network.EndpointSettings
+		running  bool
 		want     bool
 	}{
 		{name: "missing network map", networks: nil, want: false},
 		{name: "none network", networks: map[string]*network.EndpointSettings{"none": {}}, want: false},
 		{name: "nil bridge endpoint", networks: map[string]*network.EndpointSettings{"bridge": nil}, want: false},
-		{name: "empty bridge endpoint", networks: map[string]*network.EndpointSettings{"bridge": {}}, want: false},
 		{
-			name: "bridge endpoint",
-			networks: map[string]*network.EndpointSettings{
-				"bridge": {NetworkID: "bridge-network-id"},
-			},
-			want: true,
+			// What Docker reports for a container that was created by an
+			// install and has never been started.
+			name:     "created container with configured bridge",
+			networks: map[string]*network.EndpointSettings{"bridge": {}},
+			running:  false,
+			want:     true,
+		},
+		{
+			name:     "running container without a bridge endpoint needs repair",
+			networks: map[string]*network.EndpointSettings{"bridge": {}},
+			running:  true,
+			want:     false,
+		},
+		{
+			name:     "running container on the bridge",
+			networks: map[string]*network.EndpointSettings{"bridge": {NetworkID: "bridge-network-id"}},
+			running:  true,
+			want:     true,
+		},
+		{
+			name:     "stopped container keeps its bridge",
+			networks: map[string]*network.EndpointSettings{"bridge": {NetworkID: "bridge-network-id"}},
+			running:  false,
+			want:     true,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := containerHasNetwork(test.networks, defaultServerNetwork); got != test.want {
+			if got := containerHasNetwork(test.networks, defaultServerNetwork, test.running); got != test.want {
 				t.Fatalf("containerHasNetwork() = %t, want %t", got, test.want)
 			}
 		})

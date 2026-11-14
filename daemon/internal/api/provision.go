@@ -536,8 +536,20 @@ func waitForExit(ctx context.Context, uuid string, limit time.Duration) bool {
 	}
 }
 
+var errServerNotRunning = errors.New("the server is not running")
+
 // sendConsoleCommand writes one line to the server's standard input.
 func sendConsoleCommand(ctx context.Context, uuid string, command string) error {
+	// Docker happily attaches to a stopped container and accepts input that
+	// nothing will ever read, so the state is checked first.
+	inspect, err := docker.Client.ContainerInspect(ctx, uuid)
+	if err != nil {
+		return err
+	}
+	if inspect.State == nil || !inspect.State.Running {
+		return errServerNotRunning
+	}
+
 	resp, err := docker.Client.ContainerAttach(ctx, uuid, container.AttachOptions{Stream: true, Stdin: true})
 	if err != nil {
 		return err
