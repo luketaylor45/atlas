@@ -3,7 +3,7 @@
     "name": "Paper",
     "description": "High performance Spigot fork.",
     "docker_images": [
-        "ghcr.io/ptero-eggs/yolks:java_22",
+        "ghcr.io/ptero-eggs/yolks:java_25",
         "ghcr.io/ptero-eggs/yolks:java_21",
         "ghcr.io/ptero-eggs/yolks:java_17",
         "ghcr.io/ptero-eggs/yolks:java_16",
@@ -12,7 +12,7 @@
     ],
     "startup_command": "java -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
     "stop_command": "stop",
-    "script_install": "#!/bin/ash\n# Paper Installation Script\nPROJECT=paper\ncd /mnt/server\n\nif [ -n \"${DL_PATH}\" ]; then\n    echo \"Using supplied download url: ${DL_PATH}\"\n    DOWNLOAD_URL=$(echo ${DL_PATH})\nelse\n    # Logic to fetch latest build from Paper API\n    VER_EXISTS=$(curl -s https://fill.papermc.io/v3/projects/${PROJECT} | jq -r --arg VERSION $MINECRAFT_VERSION '.versions | any(.[]; index($VERSION))' | grep -m1 true)\n    LATEST_VERSION=$(curl -s https://fill.papermc.io/v3/projects/${PROJECT} | jq -r '.versions | to_entries | .[0].value[0]')\n\n    if [ \"${VER_EXISTS}\" == \"true\" ]; then\n        VERSION=${MINECRAFT_VERSION}\n    else\n        echo \"Defaulting to latest version\"\n        VERSION=${LATEST_VERSION}\n    fi\n\n    LATEST_BUILD=$(curl -s https://fill.papermc.io/v3/projects/${PROJECT}/versions/${VERSION} | jq -r '.builds | .[-1]')\n    if [ \"${BUILD_NUMBER}\" != \"latest\" ]; then BUILD=${BUILD_NUMBER}; else BUILD=${LATEST_BUILD}; fi\n    \n    JAR_NAME=\"${PROJECT}-${VERSION}-${BUILD}.jar\"\n    DOWNLOAD_URL=\"https://api.papermc.io/v2/projects/${PROJECT}/versions/${VERSION}/builds/${BUILD}/downloads/${JAR_NAME}\"\nfi\n\necho \"Downloading ${DOWNLOAD_URL}...\"\ncurl -o ${SERVER_JARFILE} ${DOWNLOAD_URL}\necho \"eula=true\" > eula.txt\n",
+    "script_install": "#!/bin/ash\n# Paper installation script\nset -eu\n\nPROJECT=paper\nAPI=\"https://fill.papermc.io/v3/projects/${PROJECT}\"\nUA=\"atlas-panel/1.0 (https://github.com/luketaylor45/atlas)\"\ncd /mnt/server\n\nSERVER_JARFILE=\"${SERVER_JARFILE:-server.jar}\"\nMINECRAFT_VERSION=\"${MINECRAFT_VERSION:-latest}\"\nBUILD_NUMBER=\"${BUILD_NUMBER:-latest}\"\n\ndownload_jar() {\n    url=\"$1\"\n    target=\"$2\"\n    echo \"[Atlas] Downloading ${url}\"\n    rm -f \"${target}.part\"\n    if ! curl -fSL --retry 3 --retry-delay 2 -o \"${target}.part\" \"${url}\"; then\n        echo \"[Atlas] Error: the download failed.\" >&2\n        rm -f \"${target}.part\"\n        exit 1\n    fi\n    if [ \"$(head -c 2 \"${target}.part\")\" != \"PK\" ]; then\n        echo \"[Atlas] Error: the downloaded file is not a valid jar.\" >&2\n        rm -f \"${target}.part\"\n        exit 1\n    fi\n    mv -f \"${target}.part\" \"${target}\"\n}\n\nif [ -n \"${DL_PATH:-}\" ]; then\n    echo \"[Atlas] Using the supplied download URL\"\n    download_jar \"${DL_PATH}\" \"${SERVER_JARFILE}\"\nelse\n    echo \"[Atlas] Looking up Paper versions\"\n    VERSIONS=$(curl -fsSL --retry 3 -H \"User-Agent: ${UA}\" \"${API}\")\n\n    if [ \"${MINECRAFT_VERSION}\" = \"latest\" ]; then\n        # Newest version that is not a pre-release or release candidate.\n        VERSION=$(echo \"${VERSIONS}\" | jq -r '[.versions[][] | select(test(\"-\") | not)] | .[0]')\n    elif echo \"${VERSIONS}\" | jq -e --arg v \"${MINECRAFT_VERSION}\" '[.versions[][]] | index($v) != null' > /dev/null; then\n        VERSION=\"${MINECRAFT_VERSION}\"\n    else\n        echo \"[Atlas] Error: Paper has no version ${MINECRAFT_VERSION}.\" >&2\n        exit 1\n    fi\n    if [ -z \"${VERSION}\" ] || [ \"${VERSION}\" = \"null\" ]; then\n        echo \"[Atlas] Error: could not determine a Paper version.\" >&2\n        exit 1\n    fi\n\n    echo \"[Atlas] Installing Paper ${VERSION} (build ${BUILD_NUMBER})\"\n    BUILD=$(curl -fsSL --retry 3 -H \"User-Agent: ${UA}\" \"${API}/versions/${VERSION}/builds/${BUILD_NUMBER}\") || {\n        echo \"[Atlas] Error: Paper ${VERSION} has no build ${BUILD_NUMBER}.\" >&2\n        exit 1\n    }\n    DOWNLOAD_URL=$(echo \"${BUILD}\" | jq -r '.downloads[\"server:default\"].url')\n    if [ -z \"${DOWNLOAD_URL}\" ] || [ \"${DOWNLOAD_URL}\" = \"null\" ]; then\n        echo \"[Atlas] Error: that Paper build has no server download.\" >&2\n        exit 1\n    fi\n\n    download_jar \"${DOWNLOAD_URL}\" \"${SERVER_JARFILE}\"\nfi\n\necho \"eula=true\" > eula.txt\necho \"[Atlas] Finalizing installation\"\n",
     "script_container": "ghcr.io/pterodactyl/installers:alpine",
     "script_entry": "ash",
     "variables": [
@@ -20,7 +20,7 @@
             "name": "Minecraft Version",
             "env_variable": "MINECRAFT_VERSION",
             "default_value": "latest",
-            "description": "Version of Minecraft to install."
+            "description": "Minecraft version to install, or 'latest'. Current versions need Java 25; pick an older Java image for older versions."
         },
         {
             "name": "Build Number",

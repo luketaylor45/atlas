@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -238,47 +238,31 @@ func ServicePowerAction(c *gin.Context) {
 		return
 	}
 
-	// MERGE Environment: Start with Egg defaults, then apply Service overrides
-	mergedEnv := make(map[string]string)
-	for _, v := range service.Egg.Variables {
-		mergedEnv[v.EnvironmentVariable] = v.DefaultValue
+	switch req.Action {
+	case "start", "stop", "restart", "kill":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown power action"})
+		return
 	}
-	if service.Environment != "" {
-		overrides := make(map[string]string)
-		if err := json.Unmarshal([]byte(service.Environment), &overrides); err == nil {
-			for k, v := range overrides {
-				mergedEnv[k] = v
-			}
-		}
+	if service.Status == StatusInstalling || service.Status == StatusInstallationFailed {
+		c.JSON(http.StatusConflict, gin.H{"error": "This server has not finished installing"})
+		return
 	}
-	finalEnvJSON, _ := json.Marshal(mergedEnv)
-
-	// Proxy to Daemon
-	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/power", service.UUID))
-
-	payloadObj := struct {
-		Action         string `json:"action"`
-		StartupCommand string `json:"startup_command"`
-		Environment    string `json:"environment"`
-		Memory         uint64 `json:"memory"`
-		Port           int    `json:"port"`
-	}{
-		Action:         req.Action,
-		StartupCommand: resolveStartupCommand(service),
-		Environment:    string(finalEnvJSON),
-		Memory:         service.Memory,
-		Port:           service.Port,
+	if service.IsSuspended && (req.Action == "start" || req.Action == "restart") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "This server is suspended"})
+		return
 	}
 
-	log.Printf("[Core] Sending Power Action '%s' to Node %s (Service: %s). Env count: %d", req.Action, service.Node.Name, service.UUID, len(mergedEnv))
+	payload := map[string]interface{}{
+		"action":          req.Action,
+		"startup_command": resolveStartupCommand(service),
+		"stop_command":    service.Egg.StopCommand,
+		"environment":     mustJSON(mergedEnvironment(service)),
+		"memory":          service.Memory,
+		"port":            service.Port,
+	}
 
-	payload, _ := json.Marshal(payloadObj)
-	client := daemonHTTP
-	proxyReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(payload))
-	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
-	proxyReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(proxyReq)
+	resp, err := daemonJSON(daemonHTTP, &service.Node, http.MethodPost, fmt.Sprintf("/api/servers/%s/power", service.UUID), payload)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to connect to node: " + err.Error()})
 		return
@@ -343,79 +327,40 @@ func ServiceSendCommand(c *gin.Context) {
 	respondNodeResult(c, resp, "The node could not deliver the command")
 }
 
-// ServiceReinstall proxies a reinstall request to the target node
-func ServiceReinstall(c *gin.Context) {
+// serviceForPowerUser loads a service for someone allowed to control its power.
+func serviceForPowerUser(c *gin.Context, action string) (*models.Service, bool) {
 	userID := c.MustGet("user_id").(uint)
-	uuid := c.Param("uuid")
 
-	service, subUser, ok := utils.FindServiceForUser(uuid, userID)
+	service, subUser, ok := utils.FindServiceForUser(c.Param("uuid"), userID)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found or no access"})
-		return
+		return nil, false
 	}
-
-	// Permission check (Reinstall requires Control Power)
 	if subUser != nil && !subUser.CanControlPower {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to reinstall this server"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to " + action + " this server"})
+		return nil, false
+	}
+	return service, true
+}
+
+// ServiceReinstall wipes the server's files and installs it again.
+func ServiceReinstall(c *gin.Context) {
+	service, ok := serviceForPowerUser(c, "reinstall")
+	if !ok {
+		return
+	}
+	if service.Status == StatusInstalling {
+		c.JSON(http.StatusConflict, gin.H{"error": "This server is already installing. Cancel the installation first to start over."})
 		return
 	}
 
-	url := nodeURL(&service.Node, fmt.Sprintf("/api/servers/%s/reinstall", service.UUID))
-
-	// MERGE Environment for Installer
-	mergedEnv := make(map[string]string)
-	for _, v := range service.Egg.Variables {
-		mergedEnv[v.EnvironmentVariable] = v.DefaultValue
-	}
-	if service.Environment != "" {
-		overrides := make(map[string]string)
-		if err := json.Unmarshal([]byte(service.Environment), &overrides); err == nil {
-			for k, v := range overrides {
-				mergedEnv[k] = v
-			}
-		}
-	}
-	finalEnvJSON, _ := json.Marshal(mergedEnv)
-	eggImage := service.DockerImage
-	if eggImage == "" {
-		var images []string
-		if err := json.Unmarshal([]byte(service.Egg.DockerImages), &images); err == nil && len(images) > 0 {
-			eggImage = images[0]
-		}
-	}
-
-	payload := map[string]interface{}{
-		"install_script":    service.Egg.ScriptInstall,
-		"install_container": service.Egg.ScriptContainer,
-		"environment":       string(finalEnvJSON),
-		"memory":            service.Memory,
-		"disk":              service.Disk,
-		"cpu":               service.Cpu,
-		"port":              service.Port,
-		"egg_image":         eggImage,
-		"startup_command":   service.StartupCommand,
-	}
-	body, _ := json.Marshal(payload)
-
-	client := daemonHTTP
-	proxyReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	proxyReq.Header.Set("X-Node-Token", service.Node.Token)
-	proxyReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(proxyReq)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to connect to node"})
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, "Node returned error during reinstall trigger")})
+	if err := daemonDo(daemonHTTP, &service.Node, http.MethodPost, fmt.Sprintf("/api/servers/%s/reinstall", service.UUID), buildServerSpec(service)); err != nil {
+		c.JSON(nodeErrorStatus(err), gin.H{"error": "The node could not start the installation: " + err.Error()})
 		return
 	}
 
-	if err := database.DB.Model(service).Updates(map[string]interface{}{
-		"status":                "installing",
+	if err := database.DB.Model(&models.Service{}).Where("id = ?", service.ID).Updates(map[string]interface{}{
+		"status":                StatusInstalling,
 		"installation_stage":    "Reinstallation queued",
 		"installation_progress": 0,
 	}).Error; err != nil {
@@ -423,7 +368,76 @@ func ServiceReinstall(c *gin.Context) {
 		return
 	}
 
+	utils.LogActivity(c, service.ID, "reinstall", "service", "Server reinstall started", nil)
 	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+// ServiceCancelInstall stops a running installation.
+func ServiceCancelInstall(c *gin.Context) {
+	service, ok := serviceForPowerUser(c, "cancel the installation of")
+	if !ok {
+		return
+	}
+
+	if err := daemonDo(daemonHTTP, &service.Node, http.MethodPost, fmt.Sprintf("/api/servers/%s/install/cancel", service.UUID), nil); err != nil {
+		c.JSON(nodeErrorStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	utils.LogActivity(c, service.ID, "install_cancel", "service", "Installation cancelled", nil)
+	c.JSON(http.StatusAccepted, gin.H{"status": "cancelling"})
+}
+
+// ServiceRebuild recreates the server's container without touching its
+// files. It repairs a missing or outdated container (for example after the
+// port or image changed, or to pick up a security fix in how containers are
+// created).
+func ServiceRebuild(c *gin.Context) {
+	service, ok := serviceForPowerUser(c, "rebuild")
+	if !ok {
+		return
+	}
+	if service.Status == StatusInstalling || service.Status == StatusInstallationFailed {
+		c.JSON(http.StatusConflict, gin.H{"error": "This server has not finished installing"})
+		return
+	}
+
+	if err := rebuildOnNode(service); err != nil {
+		c.JSON(nodeErrorStatus(err), gin.H{"error": "The node could not rebuild the server: " + err.Error()})
+		return
+	}
+
+	utils.LogActivity(c, service.ID, "rebuild", "service", "Server container rebuilt", nil)
+	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+// ServiceInstallLog returns the installer transcript from a byte offset.
+func ServiceInstallLog(c *gin.Context) {
+	userID := c.MustGet("user_id").(uint)
+
+	service, subUser, ok := utils.FindServiceForUser(c.Param("uuid"), userID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found or no access"})
+		return
+	}
+	if subUser != nil && !subUser.CanViewConsole {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to view this server's console"})
+		return
+	}
+
+	offset, _ := strconv.ParseInt(c.Query("offset"), 10, 64)
+	resp, err := daemonJSON(daemonHTTP, &service.Node, http.MethodGet, fmt.Sprintf("/api/servers/%s/install/log?offset=%d", service.UUID, offset), nil)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Node unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		c.JSON(nodeStatus(resp.StatusCode), gin.H{"error": nodeErrorMessage(resp.Body, "The installation log is unavailable")})
+		return
+	}
+	c.DataFromReader(http.StatusOK, resp.ContentLength, "application/json", resp.Body, nil)
 }
 
 // UpdateServiceEnvironment updates the environment JSON for a service
@@ -488,7 +502,7 @@ func UpdateServiceEnvironment(c *gin.Context) {
 		"port":            service.Port,
 		"docker_image":    service.DockerImage,
 		"startup_command": resolveStartupCommand(service),
-		"environment":     service.Environment,
+		"environment":     mustJSON(mergedEnvironment(service)),
 	}
 	body, _ := json.Marshal(payload)
 

@@ -45,12 +45,25 @@ type Egg struct {
 	ScriptContainer string `gorm:"size:255" json:"script_container"`
 	ScriptCovers    bool   `gorm:"default:false" json:"script_covers"` // If true, script runs on every start? (Legacy compat)
 
+	// Ports is a JSON list of EggPort: the additional ports this game needs
+	// besides its primary one (query, RCON, ...).
+	Ports string `gorm:"type:text" json:"ports"`
+
+	// Source is "catalog" for eggs loaded from the eggs directory and
+	// "import" for eggs added through the panel.
+	Source string `gorm:"size:20;default:''" json:"source"`
+	// SeedHash is the hash of the catalog file this egg was last loaded from.
+	SeedHash string `gorm:"size:64;default:''" json:"-"`
+	// Customized is set when an admin edits a catalog egg. The seeder then
+	// leaves it alone instead of overwriting the edit on the next restart.
+	Customized bool `gorm:"default:false" json:"customized"`
+
 	// Constraint: Deleting an Egg deletes all its Variables
 	Variables []EggVariable `json:"variables" gorm:"foreignKey:EggID;constraint:OnDelete:CASCADE"`
 
-	// Constraint: Deleting an Egg should probably NOT delete Servers automatically for safety,
-	// but the user asked to fix deletion. Let's make it CASCADE for now to satisfy "Delete Nest cleans everything"
-	Servers []Service `json:"servers" gorm:"foreignKey:EggID;constraint:OnDelete:CASCADE"`
+	// Services are never removed by deleting an egg: an egg that is still in
+	// use cannot be deleted at all.
+	Servers []Service `json:"servers" gorm:"foreignKey:EggID;constraint:OnDelete:RESTRICT"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

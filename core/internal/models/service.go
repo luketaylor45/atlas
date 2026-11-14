@@ -32,8 +32,10 @@ type Service struct {
 	Disk   uint64 `gorm:"not null" json:"disk"`   // MB
 	Cpu    uint64 `gorm:"not null" json:"cpu"`    // % (100 = 1 core)
 
-	// Network
-	Port int `gorm:"not null" json:"port"`
+	// Network. Port is the primary port; Ports holds every allocation,
+	// including the primary one.
+	Port  int           `gorm:"not null" json:"port"`
+	Ports []ServicePort `json:"ports" gorm:"foreignKey:ServiceID"`
 
 	DockerImage string `gorm:"size:255" json:"docker_image"`
 

@@ -1,61 +1,77 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/luketaylor45/atlas/core/internal/config"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
+	"gorm.io/gorm"
 )
 
-// Simplified Nest Structure for JSON Import
+const catalogSource = "catalog"
+
+// JSONNest is the nest.json metadata file.
 type JSONNest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// Simplified Egg Structure for JSON Import
+// JSONEgg is an egg file in the catalog.
 type JSONEgg struct {
-	UUID            string       `json:"uuid"`
-	Name            string       `json:"name"`
-	Description     string       `json:"description"`
-	DockerImages    []string     `json:"docker_images"`
-	StartupCommand  string       `json:"startup_command"`
-	StopCommand     string       `json:"stop_command"`
-	ScriptInstall   string       `json:"script_install"`
-	ScriptContainer string       `json:"script_container"`
-	ScriptEntry     string       `json:"script_entry"`
-	Variables       []JSONEggVar `json:"variables"`
+	UUID            string           `json:"uuid"`
+	Name            string           `json:"name"`
+	Author          string           `json:"author"`
+	Description     string           `json:"description"`
+	DockerImages    []string         `json:"docker_images"`
+	StartupCommand  string           `json:"startup_command"`
+	StopCommand     string           `json:"stop_command"`
+	ScriptInstall   string           `json:"script_install"`
+	ScriptContainer string           `json:"script_container"`
+	ScriptEntry     string           `json:"script_entry"`
+	Ports           []models.EggPort `json:"ports"`
+	Variables       []JSONEggVar     `json:"variables"`
 }
 
+// JSONEggVar is one variable of a catalog egg. The visibility flags are
+// pointers so that leaving them out means "yes", not "no".
 type JSONEggVar struct {
 	Name         string `json:"name"`
 	EnvVariable  string `json:"env_variable"`
 	DefaultValue string `json:"default_value"`
-	UserEditable bool   `json:"user_editable"`
-	UserViewable bool   `json:"user_viewable"`
+	UserEditable *bool  `json:"user_editable"`
+	UserViewable *bool  `json:"user_viewable"`
 	InputType    string `json:"input_type"`
+	Rules        string `json:"rules"`
 	Description  string `json:"description"`
 }
 
-func main() {
-	log.Println("[Seed] Starting Atlas Infrastructure Seeder...")
+func boolOr(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
 
-	// Load Config & Database
+func main() {
+	log.Println("[Seed] Starting Atlas catalog seeder...")
+
 	config.LoadConfig()
 	database.Connect()
 
-	// Ensure Migrations Run (incase seed runs before core)
-	database.DB.AutoMigrate(&models.Nest{}, &models.Egg{}, &models.EggVariable{})
+	if err := database.DB.AutoMigrate(&models.Nest{}, &models.Egg{}, &models.EggVariable{}); err != nil {
+		log.Fatalf("[Seed] Migration failed: %v", err)
+	}
 
 	scanEggsDirectory()
-
 	log.Println("[Seed] Seeding complete.")
 }
 
@@ -64,105 +80,129 @@ func scanEggsDirectory() {
 	if _, err := os.Stat(root); os.IsNotExist(err) {
 		root = "Eggs"
 		if _, err := os.Stat(root); os.IsNotExist(err) {
-			log.Printf("[Seed] CRITICAL: Neither 'eggs' nor 'Eggs' directory found.")
+			log.Printf("[Seed] No eggs directory found; the catalog was left unchanged.")
 			return
 		}
 	}
 
 	log.Printf("[Seed] Scanning directory: %s", root)
-	topLevels, _ := ioutil.ReadDir(root)
+	topLevels, err := os.ReadDir(root)
+	if err != nil {
+		log.Printf("[Seed] Cannot read %s: %v; the catalog was left unchanged.", root, err)
+		return
+	}
 
-	foundCount := 0
+	// Every catalog egg found on disk. Anything previously seeded that is no
+	// longer here is retired at the end.
+	present := map[string]bool{}
+	var seededNests []uint
+	parseFailures := 0
+
+	seedDirectory := func(dir string, nest models.Nest) {
+		entries, _ := os.ReadDir(dir)
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "nest.json" {
+				continue
+			}
+			eggUUID, ok := importEgg(filepath.Join(dir, entry.Name()), nest)
+			if !ok {
+				parseFailures++
+				continue
+			}
+			present[eggUUID] = true
+		}
+	}
+
 	for _, top := range topLevels {
 		if !top.IsDir() {
 			continue
 		}
-
-		// Try to load Category Metadata
-		catName := top.Name()
-		catDesc := "Main category managed via file system."
-		if data, err := ioutil.ReadFile(filepath.Join(root, top.Name(), "nest.json")); err == nil {
-			var jn JSONNest
-			if err := json.Unmarshal(data, &jn); err == nil {
-				catName = jn.Name
-				catDesc = jn.Description
-			}
+		topPath := filepath.Join(root, top.Name())
+		name, description := readNestMetadata(topPath, top.Name(), "Main category managed via file system.")
+		rootNest, ok := ensureNest(name, top.Name(), description, nil)
+		if !ok {
+			continue
 		}
+		seededNests = append(seededNests, rootNest.ID)
+		seedDirectory(topPath, rootNest)
 
-		rootNest := ensureNest(catName, top.Name(), catDesc, nil)
-		markCatalogUnavailable(rootNest.ID)
-
-		subPath := filepath.Join(root, top.Name())
-		subLevels, _ := ioutil.ReadDir(subPath)
-
+		subLevels, _ := os.ReadDir(topPath)
 		for _, sub := range subLevels {
 			if !sub.IsDir() {
-				if filepath.Ext(sub.Name()) == ".json" && sub.Name() != "nest.json" {
-					importEgg(filepath.Join(subPath, sub.Name()), rootNest)
-					foundCount++
-				}
 				continue
 			}
-
-			// Try to load Sub-Category Metadata
-			subName := sub.Name()
-			subDesc := "Sub-category managed via file system."
-			if data, err := ioutil.ReadFile(filepath.Join(subPath, sub.Name(), "nest.json")); err == nil {
-				var jn JSONNest
-				if err := json.Unmarshal(data, &jn); err == nil {
-					subName = jn.Name
-					subDesc = jn.Description
-				}
+			subPath := filepath.Join(topPath, sub.Name())
+			subName, subDescription := readNestMetadata(subPath, sub.Name(), "Sub-category managed via file system.")
+			subNest, ok := ensureNest(subName, sub.Name(), subDescription, &rootNest.ID)
+			if !ok {
+				continue
 			}
-
-			subNest := ensureNest(subName, sub.Name(), subDesc, &rootNest.ID)
-
-			eggPath := filepath.Join(subPath, sub.Name())
-			eggFiles, _ := ioutil.ReadDir(eggPath)
-			for _, f := range eggFiles {
-				if !f.IsDir() && filepath.Ext(f.Name()) == ".json" && f.Name() != "nest.json" {
-					importEgg(filepath.Join(eggPath, f.Name()), subNest)
-					foundCount++
-				}
-			}
+			seededNests = append(seededNests, subNest.ID)
+			seedDirectory(subPath, subNest)
 		}
 	}
-	log.Printf("[Seed] Seeding complete. Processed %d eggs.", foundCount)
+
+	// A file that failed to parse says nothing about whether its egg was
+	// removed, so nothing is retired on a run with failures.
+	if parseFailures > 0 {
+		log.Printf("[Seed] %d egg file(s) could not be read; no eggs were retired this run.", parseFailures)
+	} else {
+		retireRemovedEggs(seededNests, present)
+	}
+	log.Printf("[Seed] Processed %d catalog eggs.", len(present))
 }
 
-// markCatalogUnavailable lets the files on disk define the current catalog
-// without deleting eggs that may still be referenced by existing services.
-func markCatalogUnavailable(rootNestID uint) {
-	var nestIDs []uint
-	database.DB.Model(&models.Nest{}).
-		Where("id = ? OR parent_id = ?", rootNestID, rootNestID).
-		Pluck("id", &nestIDs)
+func readNestMetadata(dir, fallbackName, fallbackDescription string) (string, string) {
+	data, err := os.ReadFile(filepath.Join(dir, "nest.json"))
+	if err != nil {
+		return fallbackName, fallbackDescription
+	}
+	var metadata JSONNest
+	if err := json.Unmarshal(data, &metadata); err != nil || metadata.Name == "" {
+		return fallbackName, fallbackDescription
+	}
+	return metadata.Name, metadata.Description
+}
 
+// isCatalogEgg reports whether the seeder owns an egg. Eggs seeded before the
+// source column existed are recognised by their "atlas-" identifiers. Eggs
+// imported through the panel are never touched by the seeder.
+func isCatalogEgg(egg *models.Egg) bool {
+	return egg.Source == catalogSource || (egg.Source == "" && strings.HasPrefix(egg.UUID, "atlas-"))
+}
+
+// retireRemovedEggs hides catalog eggs whose file was deleted. They are not
+// removed, because existing servers may still depend on them.
+func retireRemovedEggs(nestIDs []uint, present map[string]bool) {
 	if len(nestIDs) == 0 {
 		return
 	}
-
-	database.DB.Model(&models.Egg{}).
-		Where("nest_id IN ?", nestIDs).
-		Update("available", false)
+	var eggs []models.Egg
+	database.DB.Where("nest_id IN ? AND available = ?", nestIDs, true).Find(&eggs)
+	for _, egg := range eggs {
+		if !isCatalogEgg(&egg) || present[egg.UUID] {
+			continue
+		}
+		database.DB.Model(&models.Egg{}).Where("id = ?", egg.ID).Update("available", false)
+		log.Printf("[Seed] Retired egg no longer in the catalog: %s", egg.Name)
+	}
 }
 
-func ensureNest(prettyName, dirName, description string, parentID *uint) models.Nest {
+func ensureNest(prettyName, dirName, description string, parentID *uint) (models.Nest, bool) {
 	var nest models.Nest
 	slug := strings.ToLower(dirName)
 
-	// In the panel, users might rename 'games' to 'Game Servers'.
-	// We lookup by the slug (directory name) so we don't create duplicates.
+	// Nests are matched by directory name, so renaming one in the panel does
+	// not create a duplicate.
 	query := database.DB.Where("code = ?", slug)
 	if parentID != nil {
-		query = query.Where("parent_id = ?", parentID)
+		query = query.Where("parent_id = ?", *parentID)
 	} else {
 		query = query.Where("parent_id IS NULL")
 	}
 
-	// Format pretty name if it's just the directory name
 	if prettyName == dirName {
-		prettyName = strings.Title(strings.ReplaceAll(dirName, "_", " "))
+		prettyName = titleCase(strings.ReplaceAll(dirName, "_", " "))
 	}
 
 	if err := query.First(&nest).Error; err != nil {
@@ -175,83 +215,185 @@ func ensureNest(prettyName, dirName, description string, parentID *uint) models.
 		}
 		if err := database.DB.Create(&nest).Error; err != nil {
 			log.Printf("[Seed] Failed to create nest %s: %v", prettyName, err)
-		} else {
-			log.Printf("[Seed] Created Nest: %s (%s)", prettyName, slug)
+			return nest, false
 		}
+		log.Printf("[Seed] Created nest: %s (%s)", prettyName, slug)
 	}
-	return nest
+	return nest, true
 }
 
-func importEgg(path string, nest models.Nest) {
-	data, err := ioutil.ReadFile(path)
+func titleCase(value string) string {
+	words := strings.Fields(value)
+	for i, word := range words {
+		words[i] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+// importEgg loads one catalog file. It returns the egg's UUID and whether the
+// file was understood.
+//
+// An egg is only written when its file changed since it was last loaded, and
+// never when an admin has edited it in the panel: restarting Core must not
+// undo an admin's work.
+func importEgg(path string, nest models.Nest) (string, bool) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("[Seed] Failed to read egg file %s: %v", path, err)
-		return
+		return "", false
 	}
 
-	var jsonEgg JSONEgg
-	if err := json.Unmarshal(data, &jsonEgg); err != nil {
+	var file JSONEgg
+	if err := json.Unmarshal(data, &file); err != nil {
 		log.Printf("[Seed] Failed to parse egg JSON %s: %v", path, err)
-		return
+		return "", false
+	}
+	if file.UUID == "" || file.Name == "" || file.StartupCommand == "" {
+		log.Printf("[Seed] Skipping %s: uuid, name and startup_command are required", path)
+		return "", false
 	}
 
-	if jsonEgg.UUID == "" {
-		log.Printf("[Seed] Skipping %s: Missing UUID", jsonEgg.Name)
-		return
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+
+	imagesJSON, _ := json.Marshal(file.DockerImages)
+	portsJSON := ""
+	if len(file.Ports) > 0 {
+		encoded, _ := json.Marshal(file.Ports)
+		portsJSON = string(encoded)
+	}
+	author := file.Author
+	if author == "" {
+		author = "Atlas"
 	}
 
-	dockerImagesJSON, _ := json.Marshal(jsonEgg.DockerImages)
-
-	egg := models.Egg{
-		UUID:            jsonEgg.UUID,
-		NestID:          nest.ID,
-		Available:       true,
-		Name:            jsonEgg.Name,
-		Description:     jsonEgg.Description,
-		DockerImages:    string(dockerImagesJSON),
-		StartupCommand:  jsonEgg.StartupCommand,
-		StopCommand:     jsonEgg.StopCommand,
-		ScriptInstall:   jsonEgg.ScriptInstall,
-		ScriptContainer: jsonEgg.ScriptContainer,
-		ScriptEntry:     jsonEgg.ScriptEntry,
+	fields := map[string]interface{}{
+		"nest_id":          nest.ID,
+		"available":        true,
+		"author":           author,
+		"name":             file.Name,
+		"description":      file.Description,
+		"docker_images":    string(imagesJSON),
+		"startup_command":  file.StartupCommand,
+		"stop_command":     file.StopCommand,
+		"script_install":   file.ScriptInstall,
+		"script_container": file.ScriptContainer,
+		"script_entry":     file.ScriptEntry,
+		"ports":            portsJSON,
+		"source":           catalogSource,
+		"seed_hash":        hash,
 	}
 
 	var existing models.Egg
-	if err := database.DB.Where("uuid = ?", egg.UUID).First(&existing).Error; err != nil {
-		database.DB.Create(&egg)
-		log.Printf("[Seed] Imported Egg: %s -> %s", nest.Name, egg.Name)
-		existing = egg
-	} else {
-		// Always update the definition from file
-		egg.ID = existing.ID
-		database.DB.Save(&egg)
-		existing = egg
+	err = database.DB.Where("uuid = ?", file.UUID).First(&existing).Error
+	switch {
+	case err != nil:
+		egg := models.Egg{
+			UUID:            file.UUID,
+			NestID:          nest.ID,
+			Available:       true,
+			Author:          author,
+			Name:            file.Name,
+			Description:     file.Description,
+			DockerImages:    string(imagesJSON),
+			StartupCommand:  file.StartupCommand,
+			StopCommand:     file.StopCommand,
+			ScriptInstall:   file.ScriptInstall,
+			ScriptContainer: file.ScriptContainer,
+			ScriptEntry:     file.ScriptEntry,
+			Ports:           portsJSON,
+			Source:          catalogSource,
+			SeedHash:        hash,
+		}
+		if err := database.DB.Create(&egg).Error; err != nil {
+			log.Printf("[Seed] Failed to create egg %s: %v", file.Name, err)
+			return "", false
+		}
+		syncVariables(egg.ID, file.Variables)
+		log.Printf("[Seed] Added egg: %s -> %s", nest.Name, egg.Name)
+
+	case existing.Customized:
+		// Keep the admin's version; only make sure it is still offered.
+		database.DB.Model(&models.Egg{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
+			"available": true,
+			"source":    catalogSource,
+		})
+		if existing.SeedHash != hash {
+			log.Printf("[Seed] %s has a newer catalog version, but it was edited in the panel and was left as it is.", existing.Name)
+		}
+
+	case existing.SeedHash == hash && existing.Source == catalogSource:
+		// Unchanged file: nothing to write beyond keeping it available.
+		if !existing.Available {
+			database.DB.Model(&models.Egg{}).Where("id = ?", existing.ID).Update("available", true)
+		}
+
+	default:
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			return tx.Model(&models.Egg{}).Where("id = ?", existing.ID).Updates(fields).Error
+		})
+		if err != nil {
+			log.Printf("[Seed] Failed to update egg %s: %v", file.Name, err)
+			return "", false
+		}
+		syncVariables(existing.ID, file.Variables)
+		log.Printf("[Seed] Updated egg from catalog: %s", file.Name)
 	}
 
-	// Sync Variables
-	for _, v := range jsonEgg.Variables {
-		inputType := v.InputType
+	return file.UUID, true
+}
+
+// syncVariables makes an egg's variables match its catalog file: new ones are
+// added, changed ones updated and ones no longer listed removed.
+func syncVariables(eggID uint, variables []JSONEggVar) {
+	keep := make([]string, 0, len(variables))
+	for _, variable := range variables {
+		if variable.EnvVariable == "" {
+			continue
+		}
+		keep = append(keep, variable.EnvVariable)
+
+		inputType := variable.InputType
 		if inputType == "" {
 			inputType = "text"
 		}
-
-		eggVar := models.EggVariable{
-			EggID:               existing.ID,
-			Name:                v.Name,
-			EnvironmentVariable: v.EnvVariable,
-			DefaultValue:        v.DefaultValue,
-			UserEditable:        v.UserEditable,
-			UserViewable:        v.UserViewable,
-			InputType:           inputType,
-			Description:         v.Description,
+		fields := map[string]interface{}{
+			"name":          variable.Name,
+			"description":   variable.Description,
+			"default_value": variable.DefaultValue,
+			"user_editable": boolOr(variable.UserEditable, true),
+			"user_viewable": boolOr(variable.UserViewable, true),
+			"rules":         variable.Rules,
+			"input_type":    inputType,
 		}
 
-		var existingVar models.EggVariable
-		if err := database.DB.Where("egg_id = ? AND environment_variable = ?", existing.ID, eggVar.EnvironmentVariable).First(&existingVar).Error; err != nil {
-			database.DB.Create(&eggVar)
-		} else {
-			eggVar.ID = existingVar.ID
-			database.DB.Save(&eggVar)
+		var existing models.EggVariable
+		if err := database.DB.Where("egg_id = ? AND environment_variable = ?", eggID, variable.EnvVariable).First(&existing).Error; err != nil {
+			created := models.EggVariable{
+				EggID:               eggID,
+				Name:                variable.Name,
+				Description:         variable.Description,
+				EnvironmentVariable: variable.EnvVariable,
+				DefaultValue:        variable.DefaultValue,
+				Rules:               variable.Rules,
+				InputType:           inputType,
+			}
+			if err := database.DB.Create(&created).Error; err != nil {
+				log.Printf("[Seed] Failed to create variable %s: %v", variable.EnvVariable, err)
+				continue
+			}
+			// Written separately: a false value would otherwise be replaced
+			// by the column default on insert.
+			database.DB.Model(&models.EggVariable{}).Where("id = ?", created.ID).Updates(fields)
+			continue
 		}
+		database.DB.Model(&models.EggVariable{}).Where("id = ?", existing.ID).Updates(fields)
 	}
+
+	sort.Strings(keep)
+	stale := database.DB.Where("egg_id = ?", eggID)
+	if len(keep) > 0 {
+		stale = stale.Where("environment_variable NOT IN ?", keep)
+	}
+	stale.Delete(&models.EggVariable{})
 }

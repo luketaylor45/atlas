@@ -71,6 +71,7 @@ services:
       - HOST_DATA_PATH=${DATA_PATH:-/var/lib/atlas/data}
       - SERVER_UID=${SERVER_UID:-1000}
       - SERVER_GID=${SERVER_GID:-1000}
+      - INSTALL_TIMEOUT_MINUTES=${INSTALL_TIMEOUT_MINUTES:-120}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DATA_PATH:-/var/lib/atlas/data}:/var/lib/atlas/data

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -23,147 +24,204 @@ func New(cli *client.Client) *Installer {
 	return &Installer{Client: cli}
 }
 
-// Install runs the installation process for a server
-// It pulls the installer image, runs a transient container, and executes the script
-func (i *Installer) Install(ctx context.Context, uuid string, installImage string, installScript string, envVars []string, reporter ProgressReporter) error {
-	log.Printf("[Installer] Starting installation for %s using %s", uuid, installImage)
-	report := func(stage string, progress int) {
-		if reporter != nil {
-			reporter(ProgressUpdate{Stage: stage, Progress: progress})
+// Request describes one installer run.
+type Request struct {
+	UUID   string
+	Image  string
+	Script string
+	// Entry is the interpreter the egg asks for ("bash", "ash", ...). Empty
+	// means it is derived from the script's shebang.
+	Entry string
+	Env   []string
+	// ScriptDir is where the daemon writes the script, and HostScriptDir is
+	// the same directory as the Docker host sees it.
+	ScriptDir     string
+	HostScriptDir string
+	// Output receives the complete installer transcript.
+	Output   io.Writer
+	Reporter ProgressReporter
+}
+
+// ResolveEntry picks the interpreter for an install script. The egg's choice
+// wins; otherwise the shebang decides, falling back to POSIX sh.
+func ResolveEntry(entry string, script string) string {
+	if entry = strings.TrimSpace(entry); entry != "" {
+		return entry
+	}
+	firstLine, _, _ := strings.Cut(strings.TrimLeft(script, "\ufeff \t\r\n"), "\n")
+	firstLine = strings.TrimSpace(firstLine)
+	if strings.HasPrefix(firstLine, "#!") {
+		fields := strings.Fields(strings.TrimPrefix(firstLine, "#!"))
+		if len(fields) > 0 {
+			// "#!/usr/bin/env bash" names the interpreter as an argument.
+			if filepath.Base(fields[0]) == "env" && len(fields) > 1 {
+				return fields[1]
+			}
+			return filepath.Base(fields[0])
 		}
 	}
+	return "sh"
+}
 
-	// 1. Pull Installer Image
-	log.Printf("[Installer] Pulling image: %s", installImage)
+// NormalizeScript converts Windows line endings, which make shells fail with
+// confusing "not found" errors on otherwise valid scripts.
+func NormalizeScript(script string) string {
+	script = strings.TrimPrefix(script, "\ufeff")
+	script = strings.ReplaceAll(script, "\r\n", "\n")
+	script = strings.ReplaceAll(script, "\r", "\n")
+	if !strings.HasSuffix(script, "\n") {
+		script += "\n"
+	}
+	return script
+}
+
+// Install pulls the installer image and runs the egg's install script in a
+// transient container with the service directory mounted at /mnt/server.
+// Cancelling ctx stops and removes the container.
+func (i *Installer) Install(ctx context.Context, req Request) error {
+	log.Printf("[Installer] Starting installation for %s using %s", req.UUID, req.Image)
+	report := func(stage string, progress int) {
+		if req.Reporter != nil {
+			req.Reporter(ProgressUpdate{Stage: stage, Progress: progress})
+		}
+	}
+	output := req.Output
+	if output == nil {
+		output = io.Discard
+	}
+
+	// 1. Pull the installer image.
 	report("Pulling installer image", 0)
-	reader, err := i.Client.ImagePull(ctx, installImage, image.PullOptions{})
+	fmt.Fprintf(output, "[Atlas] Pulling installer image %s\n", req.Image)
+	reader, err := i.Client.ImagePull(ctx, req.Image, image.PullOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to pull installer image: %v", err)
+		return fmt.Errorf("failed to pull installer image: %w", err)
 	}
-	if err := ConsumeImagePull(reader, func(progress int) {
+	pullErr := ConsumeImagePull(reader, func(progress int) {
 		report(fmt.Sprintf("Pulling installer image: %d%%", progress), progress*8/100)
-	}); err != nil {
-		reader.Close()
-		return err
-	}
-	if err := reader.Close(); err != nil {
-		return fmt.Errorf("close installer image pull: %w", err)
+	})
+	reader.Close()
+	if pullErr != nil {
+		return pullErr
 	}
 
-	// 2. Prepare Data Directory
+	// 2. Prepare the service directory.
 	report("Preparing server storage", 8)
-	localDataDir := serverfs.LocalServicePath(uuid)
-	hostDataDir := serverfs.HostServicePath(uuid)
+	localDataDir := serverfs.LocalServicePath(req.UUID)
 	if err := serverfs.EnsureServiceDirectory(localDataDir); err != nil {
 		return fmt.Errorf("prepare server data directory: %w", err)
 	}
+	// The installer runs as root; whatever it leaves behind is handed to the
+	// game user, whether or not it succeeded.
 	defer func() {
 		if err := serverfs.NormalizeTree(localDataDir); err != nil {
-			log.Printf("[Installer] Warning: failed to normalize permissions for %s: %v", uuid, err)
+			log.Printf("[Installer] Warning: failed to normalize permissions for %s: %v", req.UUID, err)
 		}
 	}()
 
-	// 3. Prepare Environment
-	// Add default required env vars for the script
-	env := append([]string{}, envVars...)
-	env = append(env, "SERVER_UUID="+uuid)
-	env = append(env, "mnt_server=/mnt/server") // Standard Pterodactyl path
-	env = append(env, "HOME=/mnt/server")
+	// 3. Write the script to a file, as Pterodactyl-style eggs expect. Passing
+	// it as a command-line string breaks on large scripts and on quoting.
+	if err := os.MkdirAll(req.ScriptDir, 0700); err != nil {
+		return fmt.Errorf("prepare install script directory: %w", err)
+	}
+	defer os.RemoveAll(req.ScriptDir)
+	// The directory is bind-mounted, so it must be traversable by the
+	// container's root regardless of the daemon's umask.
+	if err := os.Chmod(req.ScriptDir, 0755); err != nil {
+		return fmt.Errorf("prepare install script directory: %w", err)
+	}
+	scriptPath := filepath.Join(req.ScriptDir, "install.sh")
+	if err := os.WriteFile(scriptPath, []byte(NormalizeScript(req.Script)), 0755); err != nil {
+		return fmt.Errorf("write install script: %w", err)
+	}
+	if err := os.Chmod(scriptPath, 0755); err != nil {
+		return fmt.Errorf("write install script: %w", err)
+	}
 
-	// 4. Create Ephemeral Container
-	// We mount the host data dir to /mnt/server
-	// Installer images expect root for package/bootstrap setup. The daemon
-	// normalizes the completed tree to SERVER_UID:SERVER_GID before game start.
+	env := append([]string{}, req.Env...)
+	env = append(env, "SERVER_UUID="+req.UUID, "HOME=/mnt/server")
+
+	entry := ResolveEntry(req.Entry, req.Script)
 	containerConfig := &container.Config{
-		Image:      installImage,
-		Cmd:        []string{"/bin/ash", "-c", installScript}, // Default to ash (Alpine), script usually handles bash check
+		Image:      req.Image,
+		Cmd:        []string{entry, "/mnt/install/install.sh"},
+		Entrypoint: []string{},
 		Env:        env,
 		Tty:        true,
 		WorkingDir: "/mnt/server",
 		User:       "0:0",
 	}
-
-	// For Windows Daemon, we assume C:\AtlasData is accessible to Docker
 	hostConfig := &container.HostConfig{
 		NetworkMode: container.NetworkMode("bridge"),
 		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: hostDataDir,
-				Target: "/mnt/server",
-			},
+			{Type: mount.TypeBind, Source: serverfs.HostServicePath(req.UUID), Target: "/mnt/server"},
+			{Type: mount.TypeBind, Source: req.HostScriptDir, Target: "/mnt/install", ReadOnly: true},
 		},
-		AutoRemove: false,
 	}
 
-	// Adjust for entrypoint override if needed (Pterodactyl scripts usually expect /bin/bash or /bin/sh)
-	// Some images use a custom entrypoint. For now, running the script via sh/ash -c is safest "wrapper".
-	// Pterodactyl actually injects the script into the container or passes it as an env var sometimes?
-	// Standard Ptero Install:
-	// The script is usually passed as the CMD or entrypoint args.
-	// Actually, Ptero mounts the install script or curls it.
-	// We will attempt to run it directly as a command string.
-	// IMPORTANT: Use /bin/sh to ensure compatibility if bash isn't there,
-	// but mostly these scripts assume bash.
-	if strings.HasPrefix(installScript, "#!/bin/bash") {
-		containerConfig.Cmd = []string{"/bin/bash", "-c", installScript}
-	} else {
-		containerConfig.Cmd = []string{"/bin/sh", "-c", installScript}
-	}
-
-	log.Printf("[Installer] Creating container...")
+	// 4. Run it.
 	report("Starting installer", 10)
-	containerName := "install-" + uuid
+	fmt.Fprintf(output, "[Atlas] Running install script with %s\n", entry)
+	containerName := ContainerName(req.UUID)
 	_ = i.Client.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
 	resp, err := i.Client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
-		return fmt.Errorf("failed to create installer container: %v", err)
+		return fmt.Errorf("failed to create installer container: %w", err)
 	}
-
-	defer func() {
-		i.Client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
-	}()
+	// A fresh context: the container must be removed even when ctx was cancelled.
+	defer i.Client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
 
 	if err := i.Client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("failed to start installer container: %v", err)
+		return fmt.Errorf("failed to start installer container: %w", err)
 	}
 
 	statusCh, errCh := i.Client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
 
-	// 6. Stream Logs to stdout and extract progress from installer output.
-	out, err := i.Client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+	logs, err := i.Client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
 	if err != nil {
-		return fmt.Errorf("failed to stream installer logs: %v", err)
+		return fmt.Errorf("failed to stream installer logs: %w", err)
 	}
 	recentOutput := newLineTailWriter(8)
-	if err := streamScriptOutput(out, io.MultiWriter(os.Stdout, recentOutput), reporter); err != nil {
-		out.Close()
-		return fmt.Errorf("failed to read installer logs: %v", err)
+	streamErr := streamScriptOutput(logs, io.MultiWriter(output, recentOutput), req.Reporter)
+	logs.Close()
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
 	}
-	out.Close()
-
-	// 7. Wait for completion
-	log.Printf("[Installer] Waiting for completion of %s...", resp.ID)
+	if streamErr != nil {
+		return fmt.Errorf("failed to read installer logs: %w", streamErr)
+	}
 
 	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
 	case err := <-errCh:
 		if err != nil {
-			return fmt.Errorf("error waiting for installer: %v", err)
+			return fmt.Errorf("error waiting for installer: %w", err)
 		}
 	case status := <-statusCh:
 		if status.StatusCode != 0 {
-			details := recentOutput.String()
-			if details != "" {
+			if details := recentOutput.String(); details != "" {
 				return fmt.Errorf("installer failed with exit code %d; recent output: %s", status.StatusCode, details)
 			}
 			return fmt.Errorf("installer failed with exit code %d", status.StatusCode)
 		}
 	}
 
-	log.Printf("[Installer] Installation completed successfully for %s", uuid)
 	if err := serverfs.NormalizeTree(localDataDir); err != nil {
 		return fmt.Errorf("normalize installed files: %w", err)
 	}
 	report("Installation complete", 100)
 	return nil
+}
+
+const containerPrefix = "install-"
+
+// ContainerName is the name of the transient installer container for a service.
+func ContainerName(uuid string) string {
+	return containerPrefix + uuid
+}
+
+// IsInstallerContainer reports whether a container name belongs to an installer.
+func IsInstallerContainer(name string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(name, "/"), containerPrefix)
 }

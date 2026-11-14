@@ -15,6 +15,9 @@ type Config struct {
 	HostDataPath string `mapstructure:"HOST_DATA_PATH"`
 	ServerUID    int    `mapstructure:"SERVER_UID"`
 	ServerGID    int    `mapstructure:"SERVER_GID"`
+	// InstallTimeoutMinutes bounds a single installation so a hung download
+	// cannot leave a service installing forever.
+	InstallTimeoutMinutes int `mapstructure:"INSTALL_TIMEOUT_MINUTES"`
 }
 
 var NodeConfig Config
@@ -28,6 +31,7 @@ func LoadConfig() {
 	viper.SetDefault("HOST_DATA_PATH", "")
 	viper.SetDefault("SERVER_UID", 1000)
 	viper.SetDefault("SERVER_GID", 1000)
+	viper.SetDefault("INSTALL_TIMEOUT_MINUTES", 120)
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("env")

@@ -1,18 +1,20 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"time"
+	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
 	"github.com/luketaylor45/atlas/core/internal/utils"
+	"gorm.io/gorm"
 )
 
 type CreateServiceRequest struct {
@@ -26,6 +28,9 @@ type CreateServiceRequest struct {
 	Port        int    `json:"port"`
 	Environment string `json:"environment"`
 	DockerImage string `json:"docker_image"`
+	// ExtraPorts maps an egg port's variable (for example RCON_PORT) to the
+	// port to use. Ports left out are assigned automatically.
+	ExtraPorts map[string]int `json:"extra_ports"`
 }
 
 func checkNodeResources(nodeID uint, reqMem, reqDisk uint64, excludeServiceID uint) error {
@@ -54,13 +59,20 @@ func checkNodeResources(nodeID uint, reqMem, reqDisk uint64, excludeServiceID ui
 	}
 
 	if usedMem+reqMem > node.TotalRAM {
-		return fmt.Errorf("insufficient RAM on node (Available: %dMB, Requested: %dMB)", node.TotalRAM-usedMem, reqMem)
+		return fmt.Errorf("insufficient RAM on node (Available: %dMB, Requested: %dMB)", saturatingSub(node.TotalRAM, usedMem), reqMem)
 	}
 	if usedDisk+reqDisk > node.TotalDisk {
-		return fmt.Errorf("insufficient Disk on node (Available: %dMB, Requested: %dMB)", node.TotalDisk-usedDisk, reqDisk)
+		return fmt.Errorf("insufficient Disk on node (Available: %dMB, Requested: %dMB)", saturatingSub(node.TotalDisk, usedDisk), reqDisk)
 	}
 
 	return nil
+}
+
+func saturatingSub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
 }
 
 func validateServicePort(port int) error {
@@ -70,30 +82,10 @@ func validateServicePort(port int) error {
 	return nil
 }
 
-func checkNodePortAvailable(nodeID uint, port int, excludeServiceID uint) error {
-	if err := validateServicePort(port); err != nil {
-		return err
-	}
-
-	query := database.DB.Model(&models.Service{}).Where("node_id = ? AND port = ?", nodeID, port)
-	if excludeServiceID > 0 {
-		query = query.Where("id != ?", excludeServiceID)
-	}
-
-	var count int64
-	if err := query.Count(&count).Error; err != nil {
-		return fmt.Errorf("failed to validate port availability")
-	}
-	if count > 0 {
-		return fmt.Errorf("port %d is already assigned to another service on this node", port)
-	}
-	return nil
-}
-
 // GetServices returns all services with their relations
 func GetServices(c *gin.Context) {
 	var services []models.Service
-	if err := database.DB.Preload("Node").Preload("Egg.Nest").Preload("Egg.Variables").Preload("User").Find(&services).Error; err != nil {
+	if err := database.DB.Preload("Node").Preload("Egg.Nest").Preload("Egg.Variables").Preload("User").Preload("Ports").Find(&services).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch services"})
 		return
 	}
@@ -108,47 +100,55 @@ func CreateService(c *gin.Context) {
 		return
 	}
 
-	// 1. Fetch Node
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A server name is required"})
+		return
+	}
+	if req.Memory == 0 || req.Cpu == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Memory and CPU limits must be greater than zero"})
+		return
+	}
+
 	var node models.Node
 	if err := database.DB.First(&node, req.NodeID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Node not found"})
 		return
 	}
 
-	if err := checkNodePortAvailable(req.NodeID, req.Port, 0); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var owner models.User
+	if err := database.DB.First(&owner, req.UserID).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "The selected owner does not exist"})
 		return
 	}
 
-	// 1.5 Check Resources
 	if err := checkNodeResources(req.NodeID, req.Memory, req.Disk, 0); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 2. Fetch Egg
 	var egg models.Egg
 	if err := database.DB.Preload("Variables").Where("available = ?", true).First(&egg, req.EggID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Service type not found"})
 		return
 	}
 
-	// 2a. Merge Environment Overrides with Defaults
-	envMap := make(map[string]string)
-	if req.Environment != "" {
-		json.Unmarshal([]byte(req.Environment), &envMap)
+	environment, err := validateEnvironmentOverrides(req.Environment, &egg, "", true)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
-	// Fill in defaults for missing keys
-	for _, v := range egg.Variables {
-		if _, exists := envMap[v.EnvironmentVariable]; !exists {
-			envMap[v.EnvironmentVariable] = v.DefaultValue
+	image := strings.TrimSpace(req.DockerImage)
+	if image == "" {
+		images := eggImages(&egg)
+		if len(images) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "This service type has no Docker image configured"})
+			return
 		}
+		image = images[0]
 	}
-	envJSON, _ := json.Marshal(envMap)
-	req.Environment = string(envJSON)
 
-	// 3. Create Service Record
 	service := models.Service{
 		UUID:                 uuid.New().String(),
 		Name:                 req.Name,
@@ -160,31 +160,65 @@ func CreateService(c *gin.Context) {
 		Cpu:                  req.Cpu,
 		Port:                 req.Port,
 		StartupCommand:       egg.StartupCommand,
-		Environment:          req.Environment,
-		DockerImage:          req.DockerImage,
-		Status:               "installing",
+		Environment:          environment,
+		DockerImage:          image,
+		Status:               StatusInstalling,
 		InstallationStage:    "Provisioning queued",
 		InstallationProgress: 0,
 	}
 
-	// Default to first image if none selected
-	if service.DockerImage == "" {
-		var images []string
-		json.Unmarshal([]byte(egg.DockerImages), &images)
-		if len(images) > 0 {
-			service.DockerImage = images[0]
+	// The service and its ports are created together. The unique index on
+	// (node, port) is the final arbiter if two requests race for a port.
+	var planErr error
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		used, err := usedNodePorts(tx, req.NodeID, 0)
+		if err != nil {
+			return err
 		}
-	}
-
-	if err := database.DB.Create(&service).Error; err != nil {
+		plan, err := planServicePorts(used, req.Port, eggPorts(&egg), req.ExtraPorts)
+		if err != nil {
+			planErr = err
+			return err
+		}
+		if err := tx.Create(&service).Error; err != nil {
+			return err
+		}
+		for i := range plan {
+			plan[i].ServiceID = service.ID
+			plan[i].NodeID = service.NodeID
+		}
+		if err := tx.Create(&plan).Error; err != nil {
+			return err
+		}
+		service.Ports = plan
+		return nil
+	})
+	switch {
+	case planErr != nil:
+		status := http.StatusBadRequest
+		if errors.Is(planErr, errPortTaken) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": planErr.Error()})
+		return
+	case isUniqueViolation(err):
+		c.JSON(http.StatusConflict, gin.H{"error": "One of the requested ports was just taken by another service. Try again."})
+		return
+	case err != nil:
+		log.Printf("[Core] Failed to create service: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create service record"})
 		return
 	}
 
-	// 4. Send Create Request to Daemon
-	if err := notifyDaemon(&node, &service, &egg); err != nil {
-		database.DB.Delete(&service)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to contact node: " + err.Error()})
+	service.Node = node
+	service.Egg = egg
+	if err := daemonDo(daemonHTTP, &node, http.MethodPost, "/api/servers", buildServerSpec(&service)); err != nil {
+		// Nothing exists on the node, so the record and its ports are removed
+		// outright rather than left behind as a phantom installing service.
+		if purgeErr := purgeService(&service); purgeErr != nil {
+			log.Printf("[Core] Failed to clean up service %s after a failed create: %v", service.UUID, purgeErr)
+		}
+		c.JSON(nodeErrorStatus(err), gin.H{"error": "Failed to start provisioning on the node: " + err.Error()})
 		return
 	}
 
@@ -193,65 +227,29 @@ func CreateService(c *gin.Context) {
 	c.JSON(http.StatusCreated, service)
 }
 
-func notifyDaemon(node *models.Node, service *models.Service, egg *models.Egg) error {
-	url := nodeURL(node, "/api/servers")
-
-	eggImage := service.DockerImage
-	if eggImage == "" {
-		var images []string
-		json.Unmarshal([]byte(egg.DockerImages), &images)
-		if len(images) > 0 {
-			eggImage = images[0]
+// purgeService permanently removes a service and everything that references it.
+func purgeService(service *models.Service) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("service_id = ?", service.ID).Delete(&models.ServicePort{}).Error; err != nil {
+			return err
 		}
-	}
-
-	payload := map[string]interface{}{
-		"uuid":              service.UUID,
-		"memory":            service.Memory,
-		"disk":              service.Disk,
-		"cpu":               service.Cpu,
-		"port":              service.Port,
-		"egg_image":         eggImage,
-		"startup_command":   service.StartupCommand,
-		"environment":       service.Environment, // Use service overrides
-		"install_script":    egg.ScriptInstall,
-		"install_container": egg.ScriptContainer,
-	}
-
-	body, _ := json.Marshal(payload)
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	req.Header.Set("X-Node-Token", node.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[Core] !! Daemon Connection Error !! URL: %s, Error: %v", url, err)
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		var daemonErr struct {
-			Error   string `json:"error"`
-			Details string `json:"details"`
+		if err := tx.Where("service_id = ?", service.ID).Delete(&models.ServiceUser{}).Error; err != nil {
+			return err
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&daemonErr); err == nil && daemonErr.Error != "" {
-			log.Printf("[Core] Daemon responded with error: %s - %s", daemonErr.Error, daemonErr.Details)
-			return fmt.Errorf("%s: %s", daemonErr.Error, daemonErr.Details)
+		if err := tx.Exec("DELETE FROM activity_logs WHERE service_id = ?", service.ID).Error; err != nil {
+			return err
 		}
-		log.Printf("[Core] Daemon responded with status %d", resp.StatusCode)
-		return fmt.Errorf("daemon responded with %d", resp.StatusCode)
-	}
-
-	return nil
+		return tx.Unscoped().Delete(&models.Service{}, service.ID).Error
+	})
 }
 
-// DeleteService removes a service from DB and Node
+// DeleteService removes a service from its node and then from the database.
+// If the node cannot be reached the service is kept, because deleting only
+// the record would orphan its container, files and ports. An admin can pass
+// ?force=true to remove the record anyway (for a node that is gone for good).
 func DeleteService(c *gin.Context) {
 	serviceID := c.Param("id")
+	force := c.Query("force") == "true"
 
 	var service models.Service
 	if err := database.DB.Preload("Node").First(&service, serviceID).Error; err != nil {
@@ -259,22 +257,20 @@ func DeleteService(c *gin.Context) {
 		return
 	}
 
-	// Try to notify daemon (with short timeout)
-	if err := notifyDaemonDelete(&service.Node, service.UUID); err != nil {
-		log.Printf("Failed to notify node for deletion: %v", err)
+	if err := daemonDo(daemonHTTP, &service.Node, http.MethodDelete, "/api/servers/"+service.UUID, nil); err != nil {
+		if !force {
+			c.JSON(nodeErrorStatus(err), gin.H{
+				"error":     "The node could not remove this server, so it was not deleted: " + err.Error(),
+				"can_force": true,
+			})
+			return
+		}
+		log.Printf("[Core] Force-deleting service %s although its node failed: %v", service.UUID, err)
 	}
 
-	// Delete related records first to avoid foreign key constraints
-	// 1. Delete service_users
-	database.DB.Where("service_id = ?", service.ID).Delete(&models.ServiceUser{})
-
-	// 2. Delete activity logs (if they exist)
-	database.DB.Exec("DELETE FROM activity_logs WHERE service_id = ?", service.ID)
-
-	// 3. Now delete the service itself
-	if err := database.DB.Unscoped().Delete(&service).Error; err != nil {
+	if err := purgeService(&service); err != nil {
 		log.Printf("[Core] Error deleting service from database: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete from database: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "The server was removed from its node but not from the database: " + err.Error()})
 		return
 	}
 
@@ -283,102 +279,179 @@ func DeleteService(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
-func notifyDaemonDelete(node *models.Node, uuid string) error {
-	url := nodeURL(node, fmt.Sprintf("/api/servers/%s", uuid))
-
-	client := &http.Client{
-		Timeout: 1 * time.Second,
-	}
-	req, _ := http.NewRequest("DELETE", url, nil)
-	req.Header.Set("X-Node-Token", node.Token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("node responded with %d", resp.StatusCode)
-	}
-
-	return nil
+// UpdateServiceRequest carries only the fields being changed; a field that
+// is not sent is left as it is.
+type UpdateServiceRequest struct {
+	Name        *string `json:"name"`
+	Memory      *uint64 `json:"memory"`
+	Disk        *uint64 `json:"disk"`
+	Cpu         *uint64 `json:"cpu"`
+	DockerImage *string `json:"docker_image"`
+	Port        *int    `json:"port"`
 }
 
-// UpdateService modifies an existing service record
+// UpdateService changes a service's name, limits, image or primary port.
+// A new port or image needs a new container, which is rebuilt in place; the
+// server's files are never touched.
 func UpdateService(c *gin.Context) {
-	serviceID := c.Param("id")
-	var service models.Service
-	if err := database.DB.Preload("Node").Preload("Egg").First(&service, serviceID).Error; err != nil {
+	var existing models.Service
+	if err := database.DB.First(&existing, c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
 		return
 	}
 
-	var req models.Service
+	var req UpdateServiceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Check resources if limits changed
-	if req.Memory != service.Memory || req.Disk != service.Disk {
-		if err := checkNodeResources(service.NodeID, req.Memory, req.Disk, service.ID); err != nil {
+	updates := map[string]interface{}{}
+	memory, disk := existing.Memory, existing.Disk
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "A server name is required"})
+			return
+		}
+		updates["name"] = name
+	}
+	if req.Memory != nil {
+		if *req.Memory == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Memory must be greater than zero"})
+			return
+		}
+		memory = *req.Memory
+		updates["memory"] = memory
+	}
+	if req.Disk != nil {
+		disk = *req.Disk
+		updates["disk"] = disk
+	}
+	if req.Cpu != nil {
+		if *req.Cpu == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "CPU must be greater than zero"})
+			return
+		}
+		updates["cpu"] = *req.Cpu
+	}
+	if memory != existing.Memory || disk != existing.Disk {
+		if err := checkNodeResources(existing.NodeID, memory, disk, existing.ID); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 	}
 
-	// Update fields
-	service.Name = req.Name
-	service.Memory = req.Memory
-	service.Disk = req.Disk
-	service.Cpu = req.Cpu
-	service.DockerImage = req.DockerImage
+	needsRebuild := false
+	if req.DockerImage != nil {
+		image := strings.TrimSpace(*req.DockerImage)
+		if image != "" && image != existing.DockerImage {
+			updates["docker_image"] = image
+			needsRebuild = true
+		}
+	}
 
-	if err := database.DB.Save(&service).Error; err != nil {
+	newPort := existing.Port
+	if req.Port != nil && *req.Port != existing.Port {
+		if err := validateServicePort(*req.Port); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		newPort = *req.Port
+		updates["port"] = newPort
+		needsRebuild = true
+	}
+
+	if existing.Status == StatusInstalling && needsRebuild {
+		c.JSON(http.StatusConflict, gin.H{"error": "The port and image cannot be changed while the server is installing"})
+		return
+	}
+
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if newPort != existing.Port {
+			used, err := usedNodePorts(tx, existing.NodeID, 0)
+			if err != nil {
+				return err
+			}
+			if used[newPort] {
+				return &portTakenError{Port: newPort}
+			}
+			result := tx.Model(&models.ServicePort{}).
+				Where("service_id = ? AND is_primary = ?", existing.ID, true).
+				Update("port", newPort)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				port := models.ServicePort{ServiceID: existing.ID, NodeID: existing.NodeID, Port: newPort, Env: models.PrimaryPortEnv, Name: "Game", Protocol: "both", IsPrimary: true}
+				if err := tx.Create(&port).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+		return tx.Model(&models.Service{}).Where("id = ?", existing.ID).Updates(updates).Error
+	})
+	if err != nil {
+		if errors.Is(err, errPortTaken) || isUniqueViolation(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": (&portTakenError{Port: newPort}).Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update service"})
 		return
 	}
 
-	// Notify daemon of resource changes
-	if err := notifyDaemonUpdate(&service.Node, &service, &service.Egg); err != nil {
-		log.Printf("[Core] Failed to update daemon for service %s: %v", service.UUID, err)
+	service, err := loadServiceForNode(existing.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reload service"})
+		return
 	}
 
 	utils.LogActivity(c, service.ID, "update", "service", fmt.Sprintf("Modified configuration for: %s", service.Name), nil)
 
-	c.JSON(http.StatusOK, service)
+	// Tell the node. The change is already saved, so a node failure is
+	// reported as a warning the admin can act on, not as a failed save.
+	var nodeErr error
+	switch {
+	case needsRebuild:
+		nodeErr = rebuildOnNode(service)
+	case service.Status != StatusInstalling && service.Status != StatusInstallationFailed:
+		nodeErr = daemonDo(daemonHTTP, &service.Node, http.MethodPut, "/api/servers/"+service.UUID, map[string]interface{}{
+			"memory":          service.Memory,
+			"disk":            service.Disk,
+			"cpu":             service.Cpu,
+			"port":            service.Port,
+			"docker_image":    service.DockerImage,
+			"startup_command": resolveStartupCommand(service),
+			"environment":     mustJSON(mergedEnvironment(service)),
+		})
+	}
+	if nodeErr != nil {
+		log.Printf("[Core] Failed to apply update for service %s on its node: %v", service.UUID, nodeErr)
+		c.JSON(http.StatusOK, gin.H{
+			"service": service,
+			"warning": "Saved, but the node did not apply the change: " + nodeErr.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"service": service})
 }
 
-func notifyDaemonUpdate(node *models.Node, service *models.Service, egg *models.Egg) error {
-	url := nodeURL(node, fmt.Sprintf("/api/servers/%s", service.UUID))
+func mustJSON(value interface{}) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}
 
-	payload := map[string]interface{}{
-		"memory":          service.Memory,
-		"disk":            service.Disk,
-		"cpu":             service.Cpu,
-		"port":            service.Port,
-		"docker_image":    service.DockerImage,
-		"startup_command": service.StartupCommand,
-		"environment":     service.Environment,
+// rebuildOnNode recreates the service's container from its current settings.
+func rebuildOnNode(service *models.Service) error {
+	path := "/api/servers/" + service.UUID + "/rebuild"
+	if stop := strings.TrimSpace(service.Egg.StopCommand); stop != "" {
+		path += "?stop_command=" + url.QueryEscape(stop)
 	}
-
-	body, _ := json.Marshal(payload)
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-	req, _ := http.NewRequest("PUT", url, bytes.NewBuffer(body))
-	req.Header.Set("X-Node-Token", node.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("daemon responded with %d", resp.StatusCode)
-	}
-	return nil
+	// Pulling a new image can take a while.
+	return daemonDo(daemonTransferHTTP, &service.Node, http.MethodPost, path, buildServerSpec(service))
 }

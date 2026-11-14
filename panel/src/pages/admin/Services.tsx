@@ -29,7 +29,6 @@ export default function AdminServicesPage() {
     const filteredServices = services.filter(service =>
         service.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         service.uuid.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        service.user?.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
         service.user?.username?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
@@ -38,8 +37,23 @@ export default function AdminServicesPage() {
         try {
             await api.delete(`/admin/services/${id}`);
             fetchServices();
-        } catch (err) {
-            alert("Failed to delete service. Please check node connectivity.");
+        } catch (err: any) {
+            const message = err.response?.data?.error || 'Failed to delete the service.';
+            // The node refused or was unreachable. Removing only the record
+            // would leave its container and files behind, so it needs an
+            // explicit decision.
+            if (err.response?.data?.can_force) {
+                if (confirm(`${message}\n\nRemove it from the panel anyway? Its container and files will be left on the node.`)) {
+                    try {
+                        await api.delete(`/admin/services/${id}`, { params: { force: true } });
+                        fetchServices();
+                    } catch (forceErr: any) {
+                        alert(forceErr.response?.data?.error || 'Failed to delete the service.');
+                    }
+                }
+                return;
+            }
+            alert(message);
         }
     };
 
@@ -50,11 +64,19 @@ export default function AdminServicesPage() {
     const saveEdit = async () => {
         if (!editingService) return;
         try {
-            await api.put(`/admin/services/${editingService.id}`, editingService);
+            const res = await api.put(`/admin/services/${editingService.id}`, {
+                name: editingService.name,
+                memory: editingService.memory,
+                cpu: editingService.cpu,
+                disk: editingService.disk,
+                port: editingService.port,
+                docker_image: editingService.docker_image,
+            });
             setEditingService(null);
             fetchServices();
-        } catch (err) {
-            alert("Failed to update service.");
+            if (res.data?.warning) alert(res.data.warning);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Failed to update service.');
         }
     };
 
@@ -253,6 +275,17 @@ export default function AdminServicesPage() {
                                         onChange={e => setEditingService({ ...editingService, disk: parseInt(e.target.value) })}
                                     />
                                 </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Primary Port</label>
+                                <input
+                                    type="number"
+                                    className="input-field"
+                                    value={editingService.port}
+                                    onChange={e => setEditingService({ ...editingService, port: parseInt(e.target.value) })}
+                                />
+                                <p className="text-xs text-muted pl-1">Changing the port or image rebuilds the container and restarts a running server. Files are kept.</p>
                             </div>
 
                             <div className="space-y-2">

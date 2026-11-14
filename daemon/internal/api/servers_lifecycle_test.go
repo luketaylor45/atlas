@@ -12,34 +12,6 @@ import (
 	"github.com/luketaylor45/atlas/daemon/internal/config"
 )
 
-func TestReinstallRequestBuildsCompleteProvisionRequest(t *testing.T) {
-	reinstall := ReinstallRequest{
-		InstallScript:    "install",
-		InstallContainer: "installer:latest",
-		Environment:      `{"MAP":"gm_flatgrass"}`,
-		Memory:           4096,
-		Disk:             10000,
-		Cpu:              200,
-		Port:             27015,
-		EggImage:         "game:latest",
-		StartupCommand:   "./srcds_run_x64",
-	}
-
-	request := reinstall.provisionRequest("service-uuid")
-	if request.UUID != "service-uuid" || request.EggImage != reinstall.EggImage {
-		t.Fatalf("identity fields were not copied: %#v", request)
-	}
-	if request.Memory != reinstall.Memory || request.Disk != reinstall.Disk || request.Cpu != reinstall.Cpu || request.Port != reinstall.Port {
-		t.Fatalf("resource fields were not copied: %#v", request)
-	}
-	if request.InstallScript != reinstall.InstallScript || request.InstallContainer != reinstall.InstallContainer {
-		t.Fatalf("installer fields were not copied: %#v", request)
-	}
-	if request.StartupCommand != reinstall.StartupCommand || request.Environment != reinstall.Environment {
-		t.Fatalf("runtime fields were not copied: %#v", request)
-	}
-}
-
 func TestConsoleUnavailableMessageIncludesInstallerFailure(t *testing.T) {
 	previous := config.NodeConfig
 	config.NodeConfig.DataPath = t.TempDir()
@@ -80,7 +52,7 @@ func TestPowerActionErrorMessageExplainsCommonStartFailures(t *testing.T) {
 		{
 			name: "port collision",
 			err:  errors.New("Bind for 0.0.0.0:27015 failed: port is already allocated"),
-			want: []string{"host port 27015 is already in use", "reinstall it", "port is already allocated"},
+			want: []string{"host port 27015 is already in use", "different port", "port is already allocated"},
 		},
 		{
 			name: "missing bind source",

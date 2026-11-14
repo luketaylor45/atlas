@@ -47,6 +47,48 @@ By default, the "Daemon" service needs a specific authentication token to speak 
     docker-compose up -d daemon
     ```
 
+## Security Model
+
+*   **Daemon API (port 8081)** is for Core only. Every route requires the node
+    token. Compose publishes it on `127.0.0.1` and Core reaches the local
+    daemon over the Compose network. Never forward this port on your router.
+*   **Node internal address.** In **Admin > Nodes**, set *Internal Address* to
+    `daemon` for the node that runs in the same Compose stack. The public
+    address is still what players and SFTP clients use. A remote node sets
+    `ATLAS_NODE_BIND` to a private or VPN address that only Core can reach and
+    leaves *Internal Address* empty or set to that address.
+*   **Console** traffic is relayed by Core; browsers never connect to a node.
+    Your reverse proxy must pass websocket upgrades on `/api/v1/` (see the
+    example below).
+*   **Signing secret.** Leave `JWT_SECRET` unset and Atlas generates one and
+    stores it in the database. If you set it, it must be at least 32 characters.
+*   **Registration** is closed by default. Create accounts in **Admin > Users**,
+    or set `REGISTRATION_ENABLED=true` to allow public sign-up.
+*   **SFTP (port 2022)** is the only daemon port meant to be public. Repeated
+    failed logins from an address are blocked for 30 minutes.
+
+Optional `.env` settings added by this release:
+
+```dotenv
+# JWT_SECRET=                 # leave unset to auto-generate
+REGISTRATION_ENABLED=false
+ATLAS_NODE_BIND=127.0.0.1     # address the daemon API is published on
+INSTALL_TIMEOUT_MINUTES=120   # a single installation is stopped after this long
+```
+
+### Upgrading from a release before the security update
+
+After deploying, do these once:
+
+1.  Open **Admin > Nodes**, edit the local node and set *Internal Address* to
+    `daemon`. Until this is set Core will try to reach the daemon through the
+    node's public address, which no longer accepts connections.
+2.  Everyone must log in again: sessions signed with the old built-in secret
+    are rejected.
+3.  For each existing server, open **Settings > Rebuild Container**. Containers
+    created by older releases carry the node token in their environment;
+    rebuilding removes it. Files are kept and a running server is restarted.
+
 ## Updating an Existing Installation
 
 These steps preserve the PostgreSQL volume and running game-server data. Run them

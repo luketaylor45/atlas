@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/config"
 	"github.com/luketaylor45/atlas/core/internal/database"
+	"github.com/luketaylor45/atlas/core/internal/handlers"
 	"github.com/luketaylor45/atlas/core/internal/models"
 	"github.com/luketaylor45/atlas/core/internal/router"
 	"github.com/luketaylor45/atlas/core/internal/utils"
@@ -19,8 +21,12 @@ func main() {
 	database.Connect()
 
 	// Auto Migrate
-	if err := database.DB.AutoMigrate(&models.Setting{}, &models.User{}, &models.Node{}, &models.Nest{}, &models.Egg{}, &models.EggVariable{}, &models.Service{}, &models.ServiceUser{}, &models.ActivityLog{}, &models.News{}); err != nil {
+	if err := database.DB.AutoMigrate(&models.Setting{}, &models.User{}, &models.Node{}, &models.Nest{}, &models.Egg{}, &models.EggVariable{}, &models.Service{}, &models.ServicePort{}, &models.ServiceUser{}, &models.ActivityLog{}, &models.News{}); err != nil {
 		log.Fatalf("Database migration failed: %v", err)
+	}
+
+	if err := handlers.BackfillServicePorts(); err != nil {
+		log.Fatalf("Port allocation migration failed: %v", err)
 	}
 
 	if err := utils.EnsureJWTSecret(); err != nil {
@@ -46,6 +52,8 @@ func main() {
 
 	// Setup routes
 	router.Setup(r)
+
+	go handlers.StartReconciler(context.Background())
 
 	log.Printf("Atlas Core starting on port %s", config.AppConfig.Port)
 	if err := r.Run(":" + config.AppConfig.Port); err != nil {

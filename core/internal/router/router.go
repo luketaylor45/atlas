@@ -13,9 +13,9 @@ func Setup(r *gin.Engine) {
 	// CORS Setup
 	r.Use(cors.New(cors.Config{
 		AllowAllOrigins: true,
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:    []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:   []string{"Content-Length"},
 		// Sessions use a bearer header, never cookies, so credentials are not allowed cross-origin.
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
@@ -91,6 +91,9 @@ func Setup(r *gin.Engine) {
 			services.POST("/:uuid/power", handlers.ServicePowerAction)
 			services.POST("/:uuid/command", handlers.ServiceSendCommand)
 			services.POST("/:uuid/reinstall", handlers.ServiceReinstall)
+			services.POST("/:uuid/rebuild", handlers.ServiceRebuild)
+			services.POST("/:uuid/install/cancel", handlers.ServiceCancelInstall)
+			services.GET("/:uuid/install/log", handlers.ServiceInstallLog)
 			services.POST("/:uuid/environment", handlers.UpdateServiceEnvironment)
 			services.POST("/:uuid/console/ticket", handlers.CreateConsoleTicket)
 			services.GET("/:uuid/stats", handlers.ServiceStats)

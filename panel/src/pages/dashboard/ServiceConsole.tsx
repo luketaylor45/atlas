@@ -78,7 +78,10 @@ export default function ServiceConsolePage() {
     const consoleRef = useRef<HTMLDivElement>(null);
     const installationLogRef = useRef<HTMLDivElement>(null);
     const wsRef = useRef<WebSocket | null>(null);
-    const lastInstallationStageRef = useRef('');
+    const [installLog, setInstallLog] = useState('');
+    const [installActionError, setInstallActionError] = useState('');
+    const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
+    const [settingsMessage, setSettingsMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
     const fetchDetails = async () => {
         try {
@@ -235,34 +238,50 @@ export default function ServiceConsolePage() {
         };
     }, [service?.status, uuid, canViewConsole]);
 
-    // Internal logs for installation or offline
+    // Installer transcript. The node keeps the full output of the install
+    // script; it is followed here by byte offset while the overlay is shown.
+    const installVisible = isContainerUnavailableStatus(service?.status);
     useEffect(() => {
-        if (isContainerUnavailableStatus(service?.status) && logs.length === 0) {
-            const initialMessage = service.status === 'installation_failed'
-                ? `[Atlas] ${service.installation_stage || 'Installation failed before the game container was created.'}`
-                : "[Atlas] Initializing installation sequence...";
-            setLogs([makeLogLine(initialMessage)]);
-        }
-    }, [service?.status, service?.installation_stage, logs.length]);
+        if (!installVisible || !canViewConsole) return;
+
+        let cancelled = false;
+        let offset = 0;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        setInstallLog('');
+
+        const poll = async () => {
+            if (cancelled) return;
+            try {
+                const res = await api.get(`/services/${uuid}/install/log`, { params: { offset } });
+                if (cancelled) return;
+                const next = Number(res.data.offset) || 0;
+                const chunk = String(res.data.content || '');
+                if (next < offset) {
+                    // A new installation started: the transcript was reset.
+                    setInstallLog(chunk);
+                } else if (chunk) {
+                    // Keep the view bounded; the newest output matters most.
+                    setInstallLog(prev => (prev + chunk).slice(-200000));
+                }
+                offset = next;
+            } catch {
+                // The node may be briefly unreachable; keep trying.
+            }
+            if (!cancelled) timer = setTimeout(poll, 1500);
+        };
+        void poll();
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [installVisible, canViewConsole, uuid]);
 
     useEffect(() => {
-        if (!isContainerUnavailableStatus(service?.status)) {
-            lastInstallationStageRef.current = '';
-            return;
-        }
-
-        const stage = service.installation_stage?.trim();
-        if (!stage || stage === lastInstallationStageRef.current) return;
-
-        lastInstallationStageRef.current = stage;
-        setLogs(prev => [...prev, makeLogLine(`[Atlas] ${stage}`)].slice(-500));
-    }, [service?.status, service?.installation_stage]);
-
-    useEffect(() => {
-        if (isContainerUnavailableStatus(service?.status) && installationLogRef.current) {
+        if (installVisible && installationLogRef.current) {
             installationLogRef.current.scrollTop = installationLogRef.current.scrollHeight;
         }
-    }, [logs, service?.status]);
+    }, [installLog, installVisible]);
 
     useEffect(() => {
         const consoleElement = consoleRef.current;
@@ -328,9 +347,11 @@ export default function ServiceConsolePage() {
     const handleReinstall = async () => {
         setActionLoading(true);
         setShowReinstallConfirm(false);
+        setInstallActionError('');
         try {
             await api.post(`/services/${uuid}/reinstall`);
             setLogs([]);
+            setInstallLog('');
             setService((current: any) => current ? {
                 ...current,
                 status: 'installing',
@@ -338,7 +359,38 @@ export default function ServiceConsolePage() {
                 installation_progress: 0
             } : current);
         } catch (err) {
-            console.error("Failed to trigger reinstall", err);
+            const message = requestErrorMessage(err, 'Failed to start the installation.');
+            setInstallActionError(message);
+            setSettingsMessage({ type: 'error', text: message });
+        } finally {
+            setActionLoading(false);
+            fetchDetails();
+        }
+    };
+
+    const handleCancelInstall = async () => {
+        setActionLoading(true);
+        setInstallActionError('');
+        try {
+            await api.post(`/services/${uuid}/install/cancel`);
+        } catch (err) {
+            setInstallActionError(requestErrorMessage(err, 'Failed to cancel the installation.'));
+        } finally {
+            setActionLoading(false);
+            fetchDetails();
+        }
+    };
+
+    const handleRebuild = async () => {
+        setActionLoading(true);
+        setShowRebuildConfirm(false);
+        setSettingsMessage(null);
+        try {
+            await api.post(`/services/${uuid}/rebuild`);
+            setSettingsMessage({ type: 'success', text: 'The server container was rebuilt. Your files were not changed.' });
+            setWsVersion(v => v + 1);
+        } catch (err) {
+            setSettingsMessage({ type: 'error', text: requestErrorMessage(err, 'Failed to rebuild the server.') });
         } finally {
             setActionLoading(false);
             fetchDetails();
@@ -399,6 +451,12 @@ export default function ServiceConsolePage() {
             {(installationInProgress || installationFailed) && (
                 <div className="fixed inset-0 z-[100] bg-background flex flex-col items-center overflow-y-auto p-8 animate-in text-foreground">
                     <div className="max-w-4xl w-full space-y-12 my-auto py-8">
+                        <button
+                            onClick={() => navigate('/services')}
+                            className="flex items-center gap-2 text-sm font-semibold text-muted hover:text-foreground transition-colors"
+                        >
+                            <ArrowLeft size={16} /> Back to servers
+                        </button>
                         <div className="text-center space-y-4">
                             <h2 className={clsx("text-4xl font-bold tracking-tight", installationFailed && "text-red-500")}>
                                 {installationFailed ? 'Installation Failed' : 'Installing Server'}
@@ -436,7 +494,7 @@ export default function ServiceConsolePage() {
                         </div>
 
                         {/* Console Logs */}
-                        <div className="panel-card !p-0 bg-black border-border overflow-hidden h-[300px]">
+                        <div className="panel-card !p-0 bg-black border-border overflow-hidden h-[420px]">
                             <div className="px-4 py-2 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
                                 <span className={clsx("text-[10px] font-bold uppercase tracking-widest", installationFailed ? "text-red-400" : "text-zinc-500")}>
                                     {installationFailed ? 'Installer Failure' : 'Installation Logs'}
@@ -448,13 +506,10 @@ export default function ServiceConsolePage() {
                                     <div className={clsx("w-1.5 h-1.5 rounded-full", installationFailed ? "bg-red-500" : "bg-primary animate-pulse")} />
                                 </div>
                             </div>
-                            <div ref={installationLogRef} className="p-6 font-mono text-xs overflow-y-auto h-[calc(100%-35px)] space-y-1 text-zinc-400">
-                                {logs.map((log, i) => (
-                                    <div key={log.id} className="flex gap-4">
-                                        <span className="text-[10px] text-zinc-700 w-8 shrink-0">{i + 1}</span>
-                                        <span className="break-all">{log.message}</span>
-                                    </div>
-                                ))}
+                            <div ref={installationLogRef} className="p-6 font-mono text-xs overflow-y-auto h-[calc(100%-35px)] text-zinc-400 whitespace-pre-wrap break-all">
+                                {canViewConsole
+                                    ? (stripAnsi(installLog) || (installationFailed ? 'No installer output was recorded.' : 'Waiting for the installer to start...'))
+                                    : 'You do not have permission to view the installation log.'}
                             </div>
                         </div>
 
@@ -471,11 +526,27 @@ export default function ServiceConsolePage() {
                                 />
                             </div>
                         </div>
+                        {installActionError && (
+                            <div className="panel-card border-red-500/30 bg-red-500/5 p-4 text-sm text-red-400 font-medium" role="alert">
+                                {installActionError}
+                            </div>
+                        )}
+                        {installationInProgress && (isOwner || permissions?.can_control_power) && (
+                            <div className="flex justify-end">
+                                <button
+                                    onClick={handleCancelInstall}
+                                    disabled={actionLoading}
+                                    className="px-6 py-3 rounded-xl border border-border font-bold text-xs uppercase tracking-wider hover:bg-secondary transition-colors disabled:opacity-40"
+                                >
+                                    Cancel installation
+                                </button>
+                            </div>
+                        )}
                         {installationFailed && (
                             <div className="panel-card border-red-500/30 bg-red-500/5 p-6 flex flex-col md:flex-row md:items-center justify-between gap-5">
                                 <div>
                                     <div className="text-xs font-bold uppercase tracking-widest text-red-400 mb-2">Recorded failure</div>
-                                    <p className="text-sm font-mono text-red-200 break-all">
+                                    <p className="text-sm font-mono text-red-400 break-all">
                                         {service.installation_stage || 'The installer exited before Atlas could create the game container.'}
                                     </p>
                                 </div>
@@ -488,6 +559,32 @@ export default function ServiceConsolePage() {
                                 </button>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Rebuild modal */}
+            {showRebuildConfirm && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm animate-in">
+                    <div className="panel-card max-w-md w-full shadow-xl">
+                        <h2 className="text-2xl font-bold tracking-tight mb-4">Rebuild container</h2>
+                        <p className="text-muted font-medium text-sm mb-8">
+                            This recreates the container for "{service.name}" from its current settings. Your files are kept. If the server is running it will be stopped and started again.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setShowRebuildConfirm(false)}
+                                className="flex-1 px-6 py-3 rounded-xl font-bold bg-secondary hover:bg-secondary/80 transition-all text-sm"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleRebuild}
+                                className="flex-1 px-6 py-3 rounded-xl font-bold bg-primary text-white hover:brightness-110 transition-all text-sm"
+                            >
+                                Rebuild
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -800,19 +897,49 @@ export default function ServiceConsolePage() {
                     )}
 
                     {activeTab === 'settings' && (
-                        <div className="panel-card p-8 border-red-500/20">
-                            <h3 className="text-xl font-bold text-red-500 mb-6 font-bold tracking-tight">Danger Zone</h3>
-                            <div className="flex items-center justify-between p-6 bg-transparent border border-red-500/20 rounded-2xl">
-                                <div>
-                                    <h4 className="font-bold">Reinstall Server</h4>
-                                    <p className="text-xs text-muted mt-1 font-medium">This will wipe all existing files and start the installation process again.</p>
-                                </div>
-                                <button
-                                    onClick={() => setShowReinstallConfirm(true)}
-                                    className="px-6 py-2 rounded-xl bg-red-600 text-white font-bold text-xs hover:bg-red-700 transition-all shadow-md"
+                        <div className="space-y-6">
+                            {settingsMessage && (
+                                <div
+                                    role="status"
+                                    className={clsx(
+                                        "panel-card p-4 text-sm font-medium",
+                                        settingsMessage.type === 'error' ? "border-red-500/30 bg-red-500/5 text-red-400" : "border-emerald-500/30 bg-emerald-500/5 text-emerald-500"
+                                    )}
                                 >
-                                    Reinstall
-                                </button>
+                                    {settingsMessage.text}
+                                </div>
+                            )}
+                            <div className="panel-card p-8">
+                                <h3 className="text-xl font-bold mb-6 tracking-tight">Maintenance</h3>
+                                <div className="flex items-center justify-between gap-6 p-6 border border-border rounded-2xl">
+                                    <div>
+                                        <h4 className="font-bold">Rebuild Container</h4>
+                                        <p className="text-xs text-muted mt-1 font-medium">Recreates the server's container from its current settings. Files are kept. Use this if the server will not start after a settings change.</p>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowRebuildConfirm(true)}
+                                        disabled={actionLoading || (!isOwner && !permissions?.can_control_power)}
+                                        className="px-6 py-2 rounded-xl bg-secondary border border-border font-bold text-xs hover:bg-secondary/70 transition-all disabled:opacity-40 shrink-0"
+                                    >
+                                        Rebuild
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="panel-card p-8 border-red-500/20">
+                                <h3 className="text-xl font-bold text-red-500 mb-6 tracking-tight">Danger Zone</h3>
+                                <div className="flex items-center justify-between gap-6 p-6 bg-transparent border border-red-500/20 rounded-2xl">
+                                    <div>
+                                        <h4 className="font-bold">Reinstall Server</h4>
+                                        <p className="text-xs text-muted mt-1 font-medium">This will wipe all existing files and start the installation process again.</p>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowReinstallConfirm(true)}
+                                        disabled={actionLoading || (!isOwner && !permissions?.can_control_power)}
+                                        className="px-6 py-2 rounded-xl bg-red-600 text-white font-bold text-xs hover:bg-red-700 transition-all shadow-md disabled:opacity-40 shrink-0"
+                                    >
+                                        Reinstall
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     )}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,8 @@ func main() {
 
 	log.Println("Starting Atlas Daemon...")
 	log.Printf("Connecting to Core at %s", config.NodeConfig.CoreURL)
+
+	api.CleanupInterruptedInstalls(context.Background())
 
 	// Start SFTP Server
 	log.Println("[DEBUG] Starting SFTP subsystem...")
@@ -61,6 +64,7 @@ func main() {
 	// Every API route requires the node token.
 	servers := r.Group("/api/servers", api.RequireNodeToken())
 	servers.POST("", api.CreateServer)
+	servers.GET("", api.HandleListServers)
 
 	server := servers.Group("/:uuid", api.RequireServiceUUID())
 	server.POST("/power", api.HandlePowerAction)
@@ -68,6 +72,9 @@ func main() {
 	server.GET("/stats", api.HandleStats)
 	server.POST("/command", api.HandleSendCommand)
 	server.POST("/reinstall", api.HandleReinstall)
+	server.POST("/rebuild", api.HandleRebuild)
+	server.POST("/install/cancel", api.HandleCancelInstall)
+	server.GET("/install/log", api.HandleInstallLog)
 	server.PUT("", api.UpdateServer)
 	server.DELETE("", api.DeleteServer)
 

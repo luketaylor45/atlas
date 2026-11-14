@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -82,10 +83,27 @@ func UpdateNest(c *gin.Context) {
 	c.JSON(http.StatusOK, nest)
 }
 
-// DeleteNest removes a nest
+// DeleteNest removes a nest and its eggs, unless a server still uses one of them.
 func DeleteNest(c *gin.Context) {
-	id := c.Param("id")
-	database.DB.Delete(&models.Nest{}, id)
+	var nest models.Nest
+	if err := database.DB.First(&nest, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Nest not found"})
+		return
+	}
+
+	var eggIDs []uint
+	database.DB.Model(&models.Egg{}).
+		Where("nest_id = ? OR nest_id IN (?)", nest.ID, database.DB.Model(&models.Nest{}).Select("id").Where("parent_id = ?", nest.ID)).
+		Pluck("id", &eggIDs)
+	if count := eggsInUse(eggIDs); count > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("Eggs in this nest are used by %d server(s). Delete or move them first.", count)})
+		return
+	}
+
+	if err := database.DB.Delete(&models.Nest{}, nest.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete nest"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
@@ -130,6 +148,7 @@ func ImportEgg(c *gin.Context) {
 			UUID:            uuid.New().String(),
 			NestID:          nest.ID,
 			Available:       true,
+			Source:          "import",
 			Name:            atlasJSON.Name,
 			Description:     atlasJSON.Description,
 			DockerImages:    string(dockerImagesJSON),
@@ -207,6 +226,7 @@ func ImportEgg(c *gin.Context) {
 		UUID:            uuid.New().String(),
 		NestID:          nest.ID,
 		Available:       true,
+		Source:          "import",
 		Name:            ptEgg.Name,
 		Description:     ptEgg.Description,
 		DockerImages:    string(imagesJSON),
@@ -238,28 +258,61 @@ func ImportEgg(c *gin.Context) {
 func UpdateEgg(c *gin.Context) {
 	eggID := c.Param("id")
 	var egg models.Egg
-	if err := database.DB.Preload("Variables").First(&egg, eggID).Error; err != nil {
+	if err := database.DB.First(&egg, eggID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Egg not found"})
 		return
 	}
 
+	identity := egg
 	if err := c.ShouldBindJSON(&egg); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := database.DB.Save(&egg).Error; err != nil {
+	// The request body cannot move the egg to another record or rewrite the
+	// fields Atlas tracks itself.
+	egg.ID = identity.ID
+	egg.UUID = identity.UUID
+	egg.Source = identity.Source
+	egg.SeedHash = identity.SeedHash
+	egg.CreatedAt = identity.CreatedAt
+	// Remember the edit so the catalog seeder does not undo it on restart.
+	egg.Customized = true
+	egg.Variables = nil
+	egg.Servers = nil
+
+	if err := database.DB.Omit("Variables", "Servers", "Nest").Save(&egg).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update egg"})
 		return
 	}
 
+	database.DB.Preload("Variables").First(&egg, egg.ID)
 	c.JSON(http.StatusOK, egg)
 }
 
-// DeleteEgg removes an egg
+// eggsInUse counts the services that depend on the given eggs.
+func eggsInUse(eggIDs []uint) int64 {
+	if len(eggIDs) == 0 {
+		return 0
+	}
+	var count int64
+	database.DB.Unscoped().Model(&models.Service{}).Where("egg_id IN ?", eggIDs).Count(&count)
+	return count
+}
+
+// DeleteEgg removes an egg that no service uses.
 func DeleteEgg(c *gin.Context) {
-	eggID := c.Param("id")
-	if err := database.DB.Delete(&models.Egg{}, eggID).Error; err != nil {
+	var egg models.Egg
+	if err := database.DB.First(&egg, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Egg not found"})
+		return
+	}
+	if count := eggsInUse([]uint{egg.ID}); count > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("This egg is used by %d server(s). Delete or move them first.", count)})
+		return
+	}
+
+	if err := database.DB.Delete(&models.Egg{}, egg.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete egg"})
 		return
 	}

@@ -9,6 +9,24 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 
+interface EggPort {
+    name?: string;
+    env: string;
+    default?: number;
+    protocol?: string;
+}
+
+// Additional ports an egg needs besides the primary one (query, RCON, ...).
+const eggPortList = (egg: { ports?: string } | null): EggPort[] => {
+    if (!egg?.ports) return [];
+    try {
+        const parsed = JSON.parse(egg.ports);
+        return Array.isArray(parsed) ? parsed.filter((item): item is EggPort => Boolean(item?.env)) : [];
+    } catch {
+        return [];
+    }
+};
+
 export default function CreateServicePage() {
     const navigate = useNavigate();
     const [step, setStep] = useState(1);
@@ -31,6 +49,7 @@ export default function CreateServicePage() {
     const [port, setPort] = useState(25565);
     const [eggVars, setEggVars] = useState<Record<string, string>>({});
     const [selectedImage, setSelectedImage] = useState('');
+    const [extraPorts, setExtraPorts] = useState<Record<string, string>>({});
 
     useEffect(() => {
         const fetchData = async () => {
@@ -53,6 +72,7 @@ export default function CreateServicePage() {
                 defaults[v.environment_variable] = v.default_value;
             });
             setEggVars(defaults);
+            setExtraPorts({});
 
             // Set default image
             try {
@@ -76,6 +96,12 @@ export default function CreateServicePage() {
                 cpu: cpu,
                 disk: disk,
                 port: port,
+                // Ports left blank are assigned automatically by the panel.
+                extra_ports: Object.fromEntries(
+                    Object.entries(extraPorts)
+                        .map(([env, value]) => [env, parseInt(value, 10)] as const)
+                        .filter(([, value]) => Number.isInteger(value) && value > 0)
+                ),
                 environment: JSON.stringify(eggVars),
                 docker_image: selectedImage
             });
@@ -401,6 +427,20 @@ export default function CreateServicePage() {
                                                 onChange={(e) => setPort(parseInt(e.target.value))}
                                             />
                                         </div>
+                                        {eggPortList(selectedEgg).map(extra => (
+                                            <div key={extra.env} className="space-y-3">
+                                                <label className="text-[10px] font-bold text-muted uppercase tracking-widest block">
+                                                    {extra.name || extra.env} Port ({extra.protocol || 'tcp/udp'})
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    className="input-field"
+                                                    placeholder={`Automatic (default ${extra.default})`}
+                                                    value={extraPorts[extra.env] ?? ''}
+                                                    onChange={(e) => setExtraPorts({ ...extraPorts, [extra.env]: e.target.value })}
+                                                />
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
                             </div>

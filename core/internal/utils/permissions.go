@@ -46,7 +46,7 @@ func FindServiceForUser(uuid string, userID uint) (*models.Service, *models.Serv
 	}
 
 	var service models.Service
-	db := database.DB.Preload("Node").Preload("Egg.Nest").Preload("Egg.Variables")
+	db := database.DB.Preload("Node").Preload("Egg.Nest").Preload("Egg.Variables").Preload("Ports")
 
 	if user.IsAdmin {
 		// Admins can see any service

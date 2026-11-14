@@ -4,21 +4,24 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/events"
-	"github.com/luketaylor45/atlas/daemon/internal/config"
 	"github.com/luketaylor45/atlas/daemon/internal/docker"
+	"github.com/luketaylor45/atlas/daemon/internal/hoststats"
+	"github.com/luketaylor45/atlas/daemon/internal/serverfs"
 )
 
 type HeartbeatPayload struct {
-	Token string `json:"token"`
 	Stats struct {
 		CPU float64 `json:"cpu"`
 		RAM float64 `json:"ram"`
 	} `json:"stats"`
 }
+
+var hostSampler = hoststats.NewSampler()
 
 func StartHeartbeat() {
 	go MonitorEvents()
@@ -68,8 +71,10 @@ func monitorEvents(ctx context.Context) error {
 				uuid = msg.Actor.ID
 			}
 
-			// Ignore installation containers in the main monitor
-			if strings.HasPrefix(uuid, "install-") {
+			// Only game containers, which are named by their service UUID,
+			// are reported. Installers and unrelated containers on the host
+			// are not Atlas services.
+			if !serverfs.IsServiceDirectoryName(uuid) {
 				continue
 			}
 
@@ -100,12 +105,11 @@ func monitorEvents(ctx context.Context) error {
 }
 
 func sendHeartbeat() error {
-	payload := HeartbeatPayload{
-		Token: config.NodeConfig.NodeToken,
-	}
-	// Mock stats for now
-	payload.Stats.CPU = 10.5
-	payload.Stats.RAM = 512.0
+	usage := hostSampler.Sample()
+
+	var payload HeartbeatPayload
+	payload.Stats.CPU = math.Round(usage.CPUPercent*10) / 10
+	payload.Stats.RAM = math.Round(usage.UsedRAMMB)
 
 	return postCoreJSON("/api/v1/internal/heartbeat", payload)
 }
@@ -132,7 +136,6 @@ func NotifyInstallationFailure(uuid string, err error) {
 
 func notifyServiceStatus(uuid string, status string, stage string, progress *int) {
 	payload := map[string]any{
-		"token":  config.NodeConfig.NodeToken,
 		"status": status,
 	}
 	if stage != "" {
