@@ -2,52 +2,65 @@ package utils
 
 import (
 	"encoding/json"
+	"log"
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/database"
 	"github.com/luketaylor45/atlas/core/internal/models"
 )
 
-// LogActivity creates an activity log entry
+// optionalID turns "no service" or "no user" (zero) into NULL. A zero ID
+// would violate the foreign key and the entry would be silently lost.
+func optionalID(id uint) *uint {
+	if id == 0 {
+		return nil
+	}
+	return &id
+}
+
+func saveActivity(entry *models.ActivityLog) {
+	if err := database.DB.Create(entry).Error; err != nil {
+		log.Printf("[Core] Failed to record activity %q: %v", entry.Action, err)
+	}
+}
+
+// LogActivity records an action taken through the API. A serviceID of zero
+// records an instance-wide action (managing nodes, users, eggs).
 func LogActivity(c *gin.Context, serviceID uint, action string, resource string, description string, metadata map[string]interface{}) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		userID = uint(0) // System action
+	var userID uint
+	if value, exists := c.Get("user_id"); exists {
+		userID, _ = value.(uint)
 	}
 
 	metadataJSON := ""
 	if metadata != nil {
-		if bytes, err := json.Marshal(metadata); err == nil {
-			metadataJSON = string(bytes)
+		if encoded, err := json.Marshal(metadata); err == nil {
+			metadataJSON = string(encoded)
 		}
 	}
 
-	log := models.ActivityLog{
-		ServiceID:   serviceID,
-		UserID:      userID.(uint),
+	saveActivity(&models.ActivityLog{
+		ServiceID:   optionalID(serviceID),
+		UserID:      optionalID(userID),
 		Action:      action,
 		Resource:    resource,
 		Description: description,
 		IPAddress:   c.ClientIP(),
 		UserAgent:   c.GetHeader("User-Agent"),
 		Metadata:    metadataJSON,
-	}
-
-	// Fire and forget - don't block the request
-	go database.DB.Create(&log)
+	})
 }
 
-// LogActivityDirect creates a log entry without gin context (for background tasks)
+// LogActivityDirect records an action that did not come through an
+// authenticated API request (for example an SFTP login).
 func LogActivityDirect(serviceID uint, userID uint, action string, resource string, description string, ipAddress string) {
-	log := models.ActivityLog{
-		ServiceID:   serviceID,
-		UserID:      userID,
+	saveActivity(&models.ActivityLog{
+		ServiceID:   optionalID(serviceID),
+		UserID:      optionalID(userID),
 		Action:      action,
 		Resource:    resource,
 		Description: description,
 		IPAddress:   ipAddress,
 		UserAgent:   "System",
-	}
-
-	database.DB.Create(&log)
+	})
 }

@@ -2,3 +2,5 @@ vendor
 .env
 atlas-core
 atlas-seed
+*.exe
+*_test.go

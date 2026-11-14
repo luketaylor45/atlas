@@ -356,7 +356,7 @@ export default function AdminEggsPage() {
                             <div className="space-y-4">
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Install Container Image</label>
-                                    <input className="input-field font-mono text-xs" value={editingEgg.install_container} onChange={e => setEditingEgg({ ...editingEgg, install_container: e.target.value })} />
+                                    <input className="input-field font-mono text-xs" value={editingEgg.script_container} onChange={e => setEditingEgg({ ...editingEgg, script_container: e.target.value })} />
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Script Entry Point</label>
@@ -366,7 +366,7 @@ export default function AdminEggsPage() {
                             <div className="space-y-4">
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-muted uppercase tracking-widest pl-1">Installation Script</label>
-                                    <textarea className="input-field font-mono text-xs min-h-[120px]" value={editingEgg.install_script} onChange={e => setEditingEgg({ ...editingEgg, install_script: e.target.value })} />
+                                    <textarea className="input-field font-mono text-xs min-h-[120px]" value={editingEgg.script_install} onChange={e => setEditingEgg({ ...editingEgg, script_install: e.target.value })} />
                                 </div>
                             </div>
                         </div>

@@ -67,7 +67,7 @@ func main() {
 	config.LoadConfig()
 	database.Connect()
 
-	if err := database.DB.AutoMigrate(&models.Nest{}, &models.Egg{}, &models.EggVariable{}); err != nil {
+	if err := database.Migrate(); err != nil {
 		log.Fatalf("[Seed] Migration failed: %v", err)
 	}
 

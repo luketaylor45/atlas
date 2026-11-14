@@ -28,9 +28,11 @@ type ServiceUser struct {
 
 // ActivityLog tracks all service-related actions for auditing
 type ActivityLog struct {
-	ID        uint `gorm:"primaryKey" json:"id"`
-	ServiceID uint `gorm:"not null;index" json:"service_id"`
-	UserID    uint `gorm:"not null;index" json:"user_id"`
+	ID uint `gorm:"primaryKey" json:"id"`
+	// ServiceID is empty for instance-wide actions (nodes, users, eggs) and
+	// UserID is empty for actions taken by the system.
+	ServiceID *uint `gorm:"index" json:"service_id"`
+	UserID    *uint `gorm:"index" json:"user_id"`
 
 	// Action details
 	Action      string `gorm:"size:50;not null;index" json:"action"` // power, sftp, file, startup, etc.
@@ -45,6 +47,6 @@ type ActivityLog struct {
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 
 	// Relations
-	Service Service `json:"service,omitempty" gorm:"foreignKey:ServiceID"`
-	User    User    `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	Service *Service `json:"service,omitempty" gorm:"foreignKey:ServiceID"`
+	User    *User    `json:"user,omitempty" gorm:"foreignKey:UserID"`
 }

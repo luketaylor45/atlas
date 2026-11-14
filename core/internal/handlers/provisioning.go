@@ -295,39 +295,6 @@ func isUniqueViolation(err error) bool {
 		return true
 	}
 	message := err.Error()
-	return strings.Contains(message, "23505") || strings.Contains(message, "duplicate key value")
-}
-
-// BackfillServicePorts gives services created before allocations existed a
-// row for their primary port. It is safe to run on every start.
-func BackfillServicePorts() error {
-	var services []models.Service
-	err := database.DB.
-		Where("id NOT IN (?)", database.DB.Model(&models.ServicePort{}).Select("service_id").Where("is_primary = ?", true)).
-		Find(&services).Error
-	if err != nil {
-		return err
-	}
-
-	for _, service := range services {
-		port := models.ServicePort{
-			ServiceID: service.ID,
-			NodeID:    service.NodeID,
-			Port:      service.Port,
-			Env:       models.PrimaryPortEnv,
-			Name:      "Game",
-			Protocol:  "both",
-			IsPrimary: true,
-		}
-		if err := database.DB.Create(&port).Error; err != nil {
-			// Two legacy services sharing a port cannot both hold it. The
-			// first keeps it; the conflict is reported, not fatal.
-			if isUniqueViolation(err) {
-				fmt.Printf("[Core] Service %s shares port %d with another service on its node; assign it a different port.\n", service.UUID, service.Port)
-				continue
-			}
-			return err
-		}
-	}
-	return nil
+	return strings.Contains(message, "23505") || strings.Contains(message, "duplicate key value") ||
+		strings.Contains(message, "UNIQUE constraint failed")
 }

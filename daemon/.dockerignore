@@ -1,3 +1,5 @@
 vendor
 .env
 atlas-daemon
+*.exe
+*_test.go

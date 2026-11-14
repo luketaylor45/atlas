@@ -172,7 +172,18 @@ func GetUserServices(c *gin.Context) {
 		return
 	}
 
+	for i := range services {
+		redactForUser(&services[i])
+	}
 	c.JSON(http.StatusOK, services)
+}
+
+// redactForUser removes what only administrators need from a service before
+// it is sent to its owner or a sub-user: the egg's install script (which can
+// embed download tokens) and how Core reaches the node internally.
+func redactForUser(service *models.Service) {
+	service.Egg.ScriptInstall = ""
+	service.Node.InternalAddress = ""
 }
 
 // GetServiceDetails returns a single service by UUID
@@ -189,6 +200,10 @@ func GetServiceDetails(c *gin.Context) {
 	// Check if this user is an admin
 	var user models.User
 	database.DB.First(&user, userID)
+
+	if !user.IsAdmin {
+		redactForUser(service)
+	}
 
 	if user.IsAdmin {
 		c.JSON(http.StatusOK, gin.H{

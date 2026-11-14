@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/luketaylor45/atlas/core/internal/database"
@@ -45,13 +46,16 @@ func GetServiceUsers(c *gin.Context) {
 }
 
 type AddServiceUserRequest struct {
-	UserID          uint `json:"user_id" binding:"required"`
-	CanViewConsole  bool `json:"can_view_console"`
-	CanSendCommands bool `json:"can_send_commands"`
-	CanManageFiles  bool `json:"can_manage_files"`
-	CanEditStartup  bool `json:"can_edit_startup"`
-	CanControlPower bool `json:"can_control_power"`
-	CanAccessSFTP   bool `json:"can_access_sftp"`
+	// The user is identified by ID (admins, who can list users) or by exact
+	// username (owners, who cannot).
+	UserID          uint   `json:"user_id"`
+	Username        string `json:"username"`
+	CanViewConsole  bool   `json:"can_view_console"`
+	CanSendCommands bool   `json:"can_send_commands"`
+	CanManageFiles  bool   `json:"can_manage_files"`
+	CanEditStartup  bool   `json:"can_edit_startup"`
+	CanControlPower bool   `json:"can_control_power"`
+	CanAccessSFTP   bool   `json:"can_access_sftp"`
 }
 
 // AddServiceUser adds a sub-user to a service
@@ -63,9 +67,26 @@ func AddServiceUser(c *gin.Context) {
 
 	var req AddServiceUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
+
+	var target models.User
+	lookup := database.DB
+	switch {
+	case req.UserID != 0:
+		lookup = lookup.Where("id = ?", req.UserID)
+	case strings.TrimSpace(req.Username) != "":
+		lookup = lookup.Where("LOWER(username) = LOWER(?)", strings.TrimSpace(req.Username))
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Enter the username of the person to add"})
+		return
+	}
+	if err := lookup.First(&target).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No user with that username exists"})
+		return
+	}
+	req.UserID = target.ID
 
 	// Prevent adding the owner as a sub-user
 	if req.UserID == service.UserID {
@@ -96,6 +117,12 @@ func AddServiceUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add user"})
 		return
 	}
+	// The console permission defaults to true in the database, so "false"
+	// has to be written explicitly or a new sub-user would silently get it.
+	if !req.CanViewConsole {
+		database.DB.Model(&models.ServiceUser{}).Where("id = ?", serviceUser.ID).Update("can_view_console", false)
+	}
+	serviceUser.User = target
 
 	// Log activity
 	utils.LogActivity(c, service.ID, "user_added", "", "Sub-user added to service", map[string]interface{}{
@@ -141,7 +168,15 @@ func UpdateServiceUser(c *gin.Context) {
 	serviceUser.CanControlPower = req.CanControlPower
 	serviceUser.CanAccessSFTP = req.CanAccessSFTP
 
-	if err := database.DB.Save(&serviceUser).Error; err != nil {
+	// Written as a map: a struct update would skip permissions being set to false.
+	if err := database.DB.Model(&models.ServiceUser{}).Where("id = ?", serviceUser.ID).Updates(map[string]interface{}{
+		"can_view_console":  req.CanViewConsole,
+		"can_send_commands": req.CanSendCommands,
+		"can_manage_files":  req.CanManageFiles,
+		"can_edit_startup":  req.CanEditStartup,
+		"can_control_power": req.CanControlPower,
+		"can_access_sftp":   req.CanAccessSFTP,
+	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update user"})
 		return
 	}
@@ -173,15 +208,4 @@ func RemoveServiceUser(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, gin.H{"status": "removed"})
-}
-
-// Helper to parse uint from string
-func parseUint(s string) uint {
-	var result uint
-	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			result = result*10 + uint(c-'0')
-		}
-	}
-	return result
 }

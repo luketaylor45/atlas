@@ -33,6 +33,8 @@ func Setup(r *gin.Engine) {
 			auth.POST("/register", credentialLimit, handlers.Register)
 			auth.POST("/setup", credentialLimit, handlers.InitialSetup)
 			auth.GET("/setup-status", handlers.GetSetupStatus)
+			auth.GET("/me", middleware.AuthMiddleware(), handlers.GetCurrentUser)
+			auth.POST("/password", middleware.AuthMiddleware(), credentialLimit, handlers.ChangeOwnPassword)
 		}
 
 		// Daemon-facing routes: every one requires a valid node token.
@@ -53,6 +55,7 @@ func Setup(r *gin.Engine) {
 			admin.POST("/nodes", handlers.CreateNode)
 			admin.PUT("/nodes/:id", handlers.UpdateNode)
 			admin.DELETE("/nodes/:id", handlers.DeleteNode)
+			admin.POST("/nodes/:id/token", handlers.RegenerateNodeToken)
 			admin.GET("/users", handlers.GetUsers)
 			admin.POST("/users", handlers.CreateUser)
 			admin.PUT("/users/:id", handlers.UpdateUser)
