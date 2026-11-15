@@ -22,6 +22,10 @@ type Node struct {
 	TotalDisk uint64  `gorm:"not null;default:0" json:"total_disk"` // In MB
 	UsedRAM   uint64  `gorm:"default:0" json:"used_ram"`
 	UsedCPU   float64 `gorm:"default:0" json:"used_cpu"`
+	// CPUCores and HostRAM (MB) are the machine's size as its daemon reports
+	// it. TotalRAM and TotalDisk above are the limits an admin allows.
+	CPUCores int    `gorm:"not null;default:0" json:"cpu_cores"`
+	HostRAM  uint64 `gorm:"not null;default:0" json:"host_ram"`
 
 	// Location
 	Location string `gorm:"size:255;default:'Unknown'" json:"location"` // Ensure simple string for now, maybe JSON later

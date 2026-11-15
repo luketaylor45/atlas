@@ -1,8 +1,11 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent } from 'react';
 import api from '../../../lib/api';
 import { errorMessage, errorStatus } from '../../../lib/errors';
-import { eggImages, type Service } from '../../../lib/types';
+import { formatCpu, formatMB } from '../../../lib/format';
+import { eggImages, type Node, type Service } from '../../../lib/types';
+import ResourceSlider from '../../../components/ResourceSlider';
 import { Alert, Button, Field, Input, Modal, Select } from '../../../components/ui';
+import { resourceLimits } from './resourceLimits';
 import { portNumber, wholeNumber } from './ServiceForm';
 
 export interface ServiceEditModalProps {
@@ -39,6 +42,22 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
     const [errors, setErrors] = useState<Partial<Record<FieldName, string>>>({});
     const [formError, setFormError] = useState('');
     const [saving, setSaving] = useState(false);
+
+    // The node's current allocation, for the sliders. The dialog works without
+    // it (the server still checks the limits when saving).
+    const [node, setNode] = useState<Node | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        api.get<Node[] | null>('/admin/nodes')
+            .then((res) => {
+                if (!cancelled) setNode((res.data ?? []).find((item) => item.id === service.node_id) ?? null);
+            })
+            .catch(() => undefined);
+        return () => {
+            cancelled = true;
+        };
+    }, [service.node_id]);
+    const limits = resourceLimits(node, { memory: service.memory, disk: service.disk, cpu: service.cpu });
 
     // The current image stays selectable even if the egg no longer lists it.
     const listed = eggImages(service.egg);
@@ -136,18 +155,45 @@ export function ServiceEditModal({ service, onClose, onSaved }: ServiceEditModal
                     {(field) => <Input {...field} value={name} onChange={(event) => setName(event.target.value)} maxLength={255} />}
                 </Field>
 
-                <div className="grid gap-4 sm:grid-cols-3">
-                    <Field label="Memory (MB)" error={errors.memory}>
-                        {(field) => (
-                            <Input {...field} inputMode="numeric" value={memory} onChange={(event) => setMemory(event.target.value)} />
-                        )}
-                    </Field>
-                    <Field label="CPU (%)" hint="100 = one core" error={errors.cpu}>
-                        {(field) => <Input {...field} inputMode="numeric" value={cpu} onChange={(event) => setCpu(event.target.value)} />}
-                    </Field>
-                    <Field label="Disk (MB)" error={errors.disk}>
-                        {(field) => <Input {...field} inputMode="numeric" value={disk} onChange={(event) => setDisk(event.target.value)} />}
-                    </Field>
+                <div className="space-y-5">
+                    <ResourceSlider
+                        label="Memory"
+                        unit="MB"
+                        value={memory}
+                        onChange={setMemory}
+                        min={256}
+                        max={Math.max(limits.memory.max, service.memory)}
+                        step={256}
+                        format={formatMB}
+                        capacity={limits.memory.capacity}
+                        hint={node ? limits.memory.hint : undefined}
+                        error={errors.memory}
+                    />
+                    <ResourceSlider
+                        label="CPU"
+                        unit="%"
+                        value={cpu}
+                        onChange={setCpu}
+                        min={25}
+                        max={Math.max(limits.cpu.max, service.cpu)}
+                        step={25}
+                        format={formatCpu}
+                        hint={node ? limits.cpu.hint : '100% is one full core.'}
+                        error={errors.cpu}
+                    />
+                    <ResourceSlider
+                        label="Disk"
+                        unit="MB"
+                        value={disk}
+                        onChange={setDisk}
+                        min={1024}
+                        max={Math.max(limits.disk.max, service.disk)}
+                        step={1024}
+                        format={formatMB}
+                        capacity={limits.disk.capacity}
+                        hint={node ? limits.disk.hint : undefined}
+                        error={errors.disk}
+                    />
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-3">

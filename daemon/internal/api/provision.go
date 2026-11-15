@@ -32,6 +32,10 @@ const (
 	startScriptName     = "start.sh"
 
 	defaultInstallImage = "ghcr.io/pterodactyl/installers:alpine"
+
+	// gameTmpfsOptions sizes the in-memory /tmp of game containers. It counts
+	// towards the container's memory limit only as far as it is used.
+	gameTmpfsOptions = "rw,exec,nosuid,size=100m"
 )
 
 // PortMapping is an additional port published for a service besides its
@@ -437,6 +441,11 @@ func createGameContainer(ctx context.Context, spec ServerSpec) (string, error) {
 	}, &container.HostConfig{
 		NetworkMode:  container.NetworkMode(defaultServerNetwork),
 		PortBindings: bindings,
+		// A private, writable /tmp, as Pterodactyl's Wings gives every game
+		// container. Many game images write a passwd entry for the
+		// unprivileged user there at start; without it Unity games such as
+		// Valheim crash before they load.
+		Tmpfs: map[string]string{"/tmp": gameTmpfsOptions},
 		Resources: container.Resources{
 			Memory:   spec.Memory * 1024 * 1024,
 			NanoCPUs: spec.Cpu * 10000000,

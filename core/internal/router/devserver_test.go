@@ -197,7 +197,7 @@ func TestDevServer(t *testing.T) {
 		must(t, db.Create(user).Error)
 	}
 
-	primary := models.Node{Name: "Node-01", Address: "play.example.com", InternalAddress: nodeURL.Hostname(), Port: nodeURL.Port(), SFTPPort: "2022", Token: token, TotalRAM: 32768, TotalDisk: 512000, UsedRAM: 21300, UsedCPU: 37.5, Location: "London, UK", IsOnline: true, LastHeartbeat: time.Now()}
+	primary := models.Node{Name: "Node-01", Address: "play.example.com", InternalAddress: nodeURL.Hostname(), Port: nodeURL.Port(), SFTPPort: "2022", Token: token, TotalRAM: 32768, TotalDisk: 512000, UsedRAM: 21300, UsedCPU: 37.5, CPUCores: 12, HostRAM: 65536, Location: "London, UK", IsOnline: true, LastHeartbeat: time.Now()}
 	spare := models.Node{Name: "Node-02", Address: "eu2.example.com", Port: "8081", SFTPPort: "2022", Token: "n_other", TotalRAM: 16384, TotalDisk: 256000, UsedRAM: 15900, UsedCPU: 93, Location: "Frankfurt, DE", IsOnline: false, LastHeartbeat: time.Now().Add(-3 * time.Hour)}
 	must(t, db.Create(&primary).Error)
 	must(t, db.Create(&spare).Error)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,6 +19,9 @@ type HeartbeatPayload struct {
 	Stats struct {
 		CPU float64 `json:"cpu"`
 		RAM float64 `json:"ram"`
+		// The host's size, so the panel can offer sensible limits.
+		Cores    int     `json:"cores"`
+		TotalRAM float64 `json:"total_ram"`
 	} `json:"stats"`
 }
 
@@ -105,6 +109,8 @@ func sendHeartbeat() error {
 	var payload HeartbeatPayload
 	payload.Stats.CPU = math.Round(usage.CPUPercent*10) / 10
 	payload.Stats.RAM = math.Round(usage.UsedRAMMB)
+	payload.Stats.Cores = runtime.NumCPU()
+	payload.Stats.TotalRAM = math.Round(usage.TotalRAMMB)
 
 	return postCoreJSON("/api/v1/internal/heartbeat", payload)
 }

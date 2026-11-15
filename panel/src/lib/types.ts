@@ -20,6 +20,14 @@ export interface Node {
     total_disk: number;
     used_ram: number;
     used_cpu: number;
+    /** The machine's size as its daemon reports it; 0 until it has. */
+    cpu_cores?: number;
+    host_ram?: number;
+    /** What the servers on the node have been given (admin listing only). */
+    allocated_memory?: number;
+    allocated_disk?: number;
+    allocated_cpu?: number;
+    servers?: number;
     location: string;
     is_online: boolean;
     last_heartbeat?: string;

@@ -102,8 +102,55 @@ func GetNodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch nodes"})
 		return
 	}
+
+	allocations, err := nodeAllocations()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch node usage"})
+		return
+	}
+
 	// Online state is kept current by the reconciler.
-	c.JSON(http.StatusOK, nodes)
+	result := make([]nodeWithAllocation, 0, len(nodes))
+	for _, node := range nodes {
+		result = append(result, nodeWithAllocation{Node: node, nodeAllocation: allocations[node.ID]})
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// nodeAllocation is what the servers on a node have been given, which is
+// what limits new servers (not what they happen to be using right now).
+type nodeAllocation struct {
+	AllocatedMemory uint64 `json:"allocated_memory"` // MB
+	AllocatedDisk   uint64 `json:"allocated_disk"`   // MB
+	AllocatedCPU    uint64 `json:"allocated_cpu"`    // percent, 100 per core
+	Servers         int64  `json:"servers"`
+}
+
+type nodeWithAllocation struct {
+	models.Node
+	nodeAllocation
+}
+
+func nodeAllocations() (map[uint]nodeAllocation, error) {
+	var rows []struct {
+		NodeID uint
+		Memory uint64
+		Disk   uint64
+		Cpu    uint64
+		Count  int64
+	}
+	err := database.DB.Model(&models.Service{}).
+		Select("node_id, COALESCE(SUM(memory), 0) AS memory, COALESCE(SUM(disk), 0) AS disk, COALESCE(SUM(cpu), 0) AS cpu, COUNT(*) AS count").
+		Group("node_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uint]nodeAllocation, len(rows))
+	for _, row := range rows {
+		result[row.NodeID] = nodeAllocation{AllocatedMemory: row.Memory, AllocatedDisk: row.Disk, AllocatedCPU: row.Cpu, Servers: row.Count}
+	}
+	return result, nil
 }
 
 func newNodeToken() string {

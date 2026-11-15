@@ -1119,3 +1119,35 @@ func TestPortsTheGameDerivesMoveWithTheGamePort(t *testing.T) {
 		t.Fatalf("the other server changed: %v", got)
 	}
 }
+
+func TestNodeListShowsAllocationAndHostSize(t *testing.T) {
+	e := newEnv(t)
+	e.createService(8211)
+	e.createService(8300)
+
+	if code := e.nodeReport(e.node.token, "/heartbeat", map[string]interface{}{"stats": map[string]interface{}{"cpu": 12.5, "ram": 4000, "cores": 12, "total_ram": 15892}}); code != http.StatusOK {
+		t.Fatalf("heartbeat: %d", code)
+	}
+	// A daemon that does not report the host's size leaves it as it was.
+	if code := e.nodeReport(e.node.token, "/heartbeat", map[string]interface{}{"stats": map[string]interface{}{"cpu": 10, "ram": 4100}}); code != http.StatusOK {
+		t.Fatalf("old heartbeat: %d", code)
+	}
+
+	res := e.expect(e.do(&e.admin, http.MethodGet, "/admin/nodes", nil), http.StatusOK)
+	var nodes []map[string]interface{}
+	must(t, json.Unmarshal([]byte(res.Raw), &nodes))
+	if len(nodes) != 1 {
+		t.Fatalf("nodes = %s", res.Raw)
+	}
+	node := nodes[0]
+	want := map[string]float64{"allocated_memory": 4096, "allocated_disk": 20000, "allocated_cpu": 400, "servers": 2, "cpu_cores": 12, "host_ram": 15892, "used_ram": 4100}
+	for key, value := range want {
+		if node[key] != value {
+			t.Errorf("%s = %v, want %v", key, node[key], value)
+		}
+	}
+	if _, leaked := node["token"]; leaked {
+		t.Error("the node token is in the listing")
+	}
+	e.expect(e.do(&e.owner, http.MethodGet, "/admin/nodes", nil), http.StatusForbidden)
+}

@@ -7,6 +7,7 @@ import { errorMessage, errorStatus } from '../../lib/errors';
 import { formatCpu, formatMB } from '../../lib/format';
 import { variableError } from '../../lib/rules';
 import { eggImages, eggPorts, type Egg, type Nest, type Node, type Service, type User } from '../../lib/types';
+import ResourceSlider from '../../components/ResourceSlider';
 import VariableInput from '../../components/VariableInput';
 import {
     Alert,
@@ -22,6 +23,7 @@ import {
     useToast,
 } from '../../components/ui';
 import { groupNests, nestEggs } from './shared/NestGroups';
+import { resourceLimits } from './shared/resourceLimits';
 import { portInMessage, portNumber, primaryLinkClass, wholeNumber } from './shared/ServiceForm';
 
 interface Options {
@@ -121,6 +123,7 @@ export default function CreateServicePage() {
     const ports = eggPorts(egg);
     const eggVariables = egg?.variables ?? [];
     const node = options?.nodes.find((item) => String(item.id) === nodeId) ?? null;
+    const limits = resourceLimits(node);
 
     // What is wrong with a variable that was changed. A value left at the
     // egg's default is not checked, here or by the API.
@@ -195,8 +198,10 @@ export default function CreateServicePage() {
         if (ownerValue === null) next.owner = 'Choose who owns the server.';
         if (nodeValue === null) next.node = 'Choose the node the server runs on.';
         if (memoryValue === null || memoryValue < 1) next.memory = 'Enter the memory limit in MB, as a whole number above zero.';
+        else if (limits.memory.capacity && memoryValue > limits.memory.free) next.memory = limits.memory.tooMuch;
         if (cpuValue === null || cpuValue < 1) next.cpu = 'Enter the CPU limit as a percentage above zero.';
         if (diskValue === null) next.disk = 'Enter the disk limit in MB, as a whole number.';
+        else if (limits.disk.capacity && diskValue > limits.disk.free) next.disk = limits.disk.tooMuch;
         if (portValue === null) next.port = 'Enter a port between 1 and 65535.';
 
         // Extra ports are optional, but the ones given must be valid and all different.
@@ -509,57 +514,53 @@ export default function CreateServicePage() {
                 <Card>
                     <CardHeader title="Resources" description="The most this server may use on its node." />
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        <Field
-                            label="Memory (MB)"
+                        <ResourceSlider
+                            label="Memory"
+                            unit="MB"
+                            value={memory}
+                            onChange={(value) => {
+                                setMemory(value);
+                                clearError('memory');
+                            }}
+                            min={256}
+                            max={limits.memory.max}
+                            step={256}
+                            format={formatMB}
+                            capacity={limits.memory.capacity}
+                            hint={limits.memory.hint}
                             error={errors.memory}
-                            hint={`1024 MB is 1 GB.${(wholeNumber(memory) ?? 0) >= 1024 ? ` This is ${formatMB(wholeNumber(memory))}.` : ''}`}
-                        >
-                            {(field) => (
-                                <Input
-                                    {...field}
-                                    inputMode="numeric"
-                                    value={memory}
-                                    onChange={(event) => {
-                                        setMemory(event.target.value);
-                                        clearError('memory');
-                                    }}
-                                />
-                            )}
-                        </Field>
-                        <Field
-                            label="CPU (%)"
+                        />
+                        <ResourceSlider
+                            label="CPU"
+                            unit="%"
+                            value={cpu}
+                            onChange={(value) => {
+                                setCpu(value);
+                                clearError('cpu');
+                            }}
+                            min={25}
+                            max={limits.cpu.max}
+                            step={25}
+                            format={formatCpu}
+                            hint={limits.cpu.hint}
                             error={errors.cpu}
-                            hint={`100 is one full core.${(wholeNumber(cpu) ?? 0) > 0 ? ` This is ${formatCpu(wholeNumber(cpu))}.` : ''}`}
-                        >
-                            {(field) => (
-                                <Input
-                                    {...field}
-                                    inputMode="numeric"
-                                    value={cpu}
-                                    onChange={(event) => {
-                                        setCpu(event.target.value);
-                                        clearError('cpu');
-                                    }}
-                                />
-                            )}
-                        </Field>
-                        <Field
-                            label="Disk (MB)"
+                        />
+                        <ResourceSlider
+                            label="Disk"
+                            unit="MB"
+                            value={disk}
+                            onChange={(value) => {
+                                setDisk(value);
+                                clearError('disk');
+                            }}
+                            min={1024}
+                            max={limits.disk.max}
+                            step={1024}
+                            format={formatMB}
+                            capacity={limits.disk.capacity}
+                            hint={limits.disk.hint}
                             error={errors.disk}
-                            hint={`Space for the server's files.${(wholeNumber(disk) ?? 0) >= 1024 ? ` This is ${formatMB(wholeNumber(disk))}.` : ''}`}
-                        >
-                            {(field) => (
-                                <Input
-                                    {...field}
-                                    inputMode="numeric"
-                                    value={disk}
-                                    onChange={(event) => {
-                                        setDisk(event.target.value);
-                                        clearError('disk');
-                                    }}
-                                />
-                            )}
-                        </Field>
+                        />
                         <Field
                             label="Docker image"
                             className="sm:col-span-2 lg:col-span-3"
