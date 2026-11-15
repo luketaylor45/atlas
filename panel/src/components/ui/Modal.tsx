@@ -102,7 +102,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
                 aria-describedby={description ? descriptionId : undefined}
                 tabIndex={-1}
                 className={cn(
-                    'relative flex max-h-[92dvh] w-full animate-pop-in flex-col rounded-t-card border border-border bg-card shadow-pop outline-none sm:rounded-card',
+                    'relative flex max-h-[92dvh] w-full animate-pop-in flex-col rounded-t-card border border-border bg-popover shadow-pop surface outline-none sm:rounded-card',
                     widths[size],
                 )}
             >

@@ -12,7 +12,7 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
 export function Card({ className, flush, ...props }: CardProps) {
     return (
         <div
-            className={cn('rounded-card border border-border bg-card shadow-card', !flush && 'p-5 sm:p-6', className)}
+            className={cn('surface rounded-card border border-border bg-card shadow-card', !flush && 'p-5 sm:p-6', className)}
             {...props}
         />
     );
@@ -59,7 +59,7 @@ export function PageHeader({ title, description, actions, eyebrow, className }: 
         <header className={cn('mb-6 flex flex-wrap items-end justify-between gap-4 sm:mb-8', className)}>
             <div className="min-w-0">
                 {eyebrow && <div className="mb-2 text-sm text-muted">{eyebrow}</div>}
-                <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+                <h1 className="page-title truncate text-foreground">{title}</h1>
                 {description && <p className="mt-1.5 max-w-2xl text-sm text-muted">{description}</p>}
             </div>
             {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -164,7 +164,9 @@ export function EmptyState({ icon, title, description, action, className }: Empt
     return (
         <div className={cn('flex flex-col items-center justify-center px-6 py-14 text-center', className)}>
             {icon && (
-                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full border border-border bg-secondary text-muted">
+                <div className="relative mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary-text ring-1 ring-primary/15">
+                    {/* A faint orbit around the icon, echoing the logo. */}
+                    <span className="absolute -inset-2 rounded-full border border-dashed border-primary/20" aria-hidden />
                     {icon}
                 </div>
             )}
@@ -347,18 +349,38 @@ export interface StatTileProps {
     /** Secondary line under the value. */
     detail?: ReactNode;
     icon?: ReactNode;
+    /** Colour of the icon chip. */
+    tone?: Tone;
     className?: string;
 }
 
+const statIconTones: Record<Tone, string> = {
+    neutral: 'bg-secondary text-muted ring-border',
+    primary: 'bg-primary/10 text-primary-text ring-primary/15',
+    success: 'bg-success/10 text-success ring-success/20',
+    warning: 'bg-warning/10 text-warning ring-warning/20',
+    danger: 'bg-danger/10 text-danger ring-danger/20',
+    info: 'bg-info/10 text-info ring-info/20',
+};
+
 /** One headline number with its label. */
-export function StatTile({ label, value, detail, icon, className }: StatTileProps) {
+export function StatTile({ label, value, detail, icon, tone = 'primary', className }: StatTileProps) {
     return (
         <Card className={cn('p-4 sm:p-5', className)}>
             <div className="flex items-center justify-between gap-3 text-sm text-muted">
                 <span>{label}</span>
-                {icon && <span className="text-subtle">{icon}</span>}
+                {icon && (
+                    <span
+                        className={cn(
+                            'flex h-8 w-8 shrink-0 items-center justify-center rounded-control ring-1 ring-inset',
+                            statIconTones[tone],
+                        )}
+                    >
+                        {icon}
+                    </span>
+                )}
             </div>
-            <div className="tabular mt-2 text-2xl font-semibold tracking-tight text-foreground">{value}</div>
+            <div className="tabular mt-1.5 text-2xl font-semibold tracking-tight text-foreground">{value}</div>
             {detail && <div className="mt-1 text-xs text-muted">{detail}</div>}
         </Card>
     );

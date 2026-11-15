@@ -128,7 +128,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
                             key={item.id}
                             role={item.tone === 'error' ? 'alert' : 'status'}
                             className={cn(
-                                'pointer-events-auto flex w-full max-w-sm animate-slide-in items-start gap-3 rounded-card border border-border bg-card p-3.5 text-sm text-foreground shadow-pop',
+                                'pointer-events-auto flex w-full max-w-sm animate-slide-in items-start gap-3 rounded-card border border-border bg-popover p-3.5 text-sm text-foreground shadow-pop surface',
                             )}
                         >
                             <span className="mt-0.5 shrink-0">{toastIcons[item.tone]}</span>

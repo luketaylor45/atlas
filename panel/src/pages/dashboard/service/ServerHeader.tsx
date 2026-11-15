@@ -1,7 +1,9 @@
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Play, RotateCw, Skull, Square } from 'lucide-react';
+import { gameIdentity } from '../../../lib/gameIdentity';
 import { isInstallState } from '../../../lib/status';
 import type { Service } from '../../../lib/types';
+import { GameIcon } from '../../../components/GameCover';
 import { Button, CopyButton, PageHeader, StatusBadge } from '../../../components/ui';
 import { isLiveStatus, type PowerAction } from './shared';
 
@@ -48,6 +50,7 @@ export function ServerHeader({ service, canPower, busy, onPower }: ServerHeaderP
             eyebrow={back}
             title={
                 <span className="flex items-center gap-3">
+                    <GameIcon identity={gameIdentity(service)} size={18} className="h-9 w-9 rounded-control" />
                     <span className="min-w-0 truncate">{service.name}</span>
                     <StatusBadge status={status} suspended={service.is_suspended} className="shrink-0" />
                 </span>

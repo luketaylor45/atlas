@@ -8,14 +8,14 @@ const options: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
     { value: 'dark', label: 'Dark', icon: Moon },
 ];
 
-/** Three-way theme switch: light, follow the system, dark. */
+/** Three-way mode switch: light, follow the system, dark. */
 export default function ThemeToggle({ className, showLabels = false }: { className?: string; showLabels?: boolean }) {
     const { preference, setPreference } = useTheme();
 
     return (
         <div
             role="radiogroup"
-            aria-label="Theme"
+            aria-label="Mode"
             className={cn('inline-flex items-center gap-0.5 rounded-control border border-border bg-secondary p-0.5', className)}
         >
             {options.map(({ value, label, icon: Icon }) => {
@@ -26,12 +26,12 @@ export default function ThemeToggle({ className, showLabels = false }: { classNa
                         type="button"
                         role="radio"
                         aria-checked={active}
-                        aria-label={showLabels ? undefined : `${label} theme`}
-                        title={`${label} theme`}
+                        aria-label={showLabels ? undefined : `${label} mode`}
+                        title={`${label} mode`}
                         onClick={() => setPreference(value)}
                         className={cn(
-                            'inline-flex h-7 items-center justify-center gap-1.5 rounded-[6px] text-xs font-medium transition-colors',
-                            showLabels ? 'px-3' : 'w-7',
+                            'inline-flex h-7 items-center justify-center gap-1.5 rounded-[calc(var(--control-radius)-2px)] text-xs font-medium transition-colors',
+                            showLabels ? 'flex-1 px-3' : 'w-7',
                             active ? 'bg-card text-foreground shadow-card' : 'text-muted hover:text-foreground',
                         )}
                     >

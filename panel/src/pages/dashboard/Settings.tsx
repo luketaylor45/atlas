@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { LogOut } from 'lucide-react';
+import ThemePicker from '../../components/appearance/ThemePicker';
 import { PasswordInput } from '../../components/AuthShell';
 import ThemeToggle from '../../components/ThemeToggle';
 import { Alert, Button, Card, CardHeader, Field, PageHeader, useToast } from '../../components/ui';
@@ -114,6 +115,29 @@ export default function SettingsPage() {
             <PageHeader title="Settings" description="Your account, password and how Atlas looks on this device." />
 
             <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+                <Card className="lg:col-span-2">
+                    <CardHeader
+                        title="Appearance"
+                        description="How Atlas looks on this device. The mode sets light or dark colours; the theme changes the layout and style."
+                    />
+                    <div className="space-y-6">
+                        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+                            <div>
+                                <h3 className="text-sm font-medium text-foreground">Mode</h3>
+                                <p className="mt-0.5 text-sm text-muted">System follows your device's setting.</p>
+                            </div>
+                            <ThemeToggle showLabels className="w-full sm:w-auto" />
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-medium text-foreground">Theme</h3>
+                            <p className="mb-4 mt-0.5 text-sm text-muted">
+                                Every theme keeps the same indigo accent and works in light and dark mode.
+                            </p>
+                            <ThemePicker />
+                        </div>
+                    </div>
+                </Card>
+
                 <div className="space-y-6">
                     <Card>
                         <CardHeader title="Account" description="An administrator can change your username or role." />
@@ -127,11 +151,6 @@ export default function SettingsPage() {
                                 <dd className="mt-1 font-medium text-foreground">{user?.is_admin ? 'Administrator' : 'Member'}</dd>
                             </div>
                         </dl>
-                    </Card>
-
-                    <Card>
-                        <CardHeader title="Appearance" description="Choose a light or dark theme. System follows your device's setting." />
-                        <ThemeToggle showLabels />
                     </Card>
 
                     <Card>

@@ -6,10 +6,16 @@
 /*
  * Design tokens.
  *
- * The accent (--primary) is the same indigo in both themes. Surfaces, text
- * and status colours change with the theme so each keeps its contrast.
- * --primary-text is the accent used as text or icon colour: it is tuned per
- * theme because one indigo cannot be readable on both white and near-black.
+ * Two independent switches live on <html>:
+ *   data-theme  = light | dark                     (the mode: colours)
+ *   data-layout = classic | horizon | compact | glass   (the theme: layout,
+ *                 density, shape, surfaces and backdrop)
+ *
+ * The accent (--primary) is the same indigo in every mode and theme.
+ * Surfaces, text and status colours change with the mode so each keeps its
+ * contrast. --primary-text is the accent used as text or icon colour: it is
+ * tuned per mode because one indigo cannot be readable on both white and
+ * near-black.
  */
 :root,
 [data-theme="light"] {
@@ -17,6 +23,7 @@
 
   --background: #f6f6f8;
   --card: #ffffff;
+  --popover: #ffffff;
   --secondary: #f0f0f3;
   --border: #e3e3e8;
   --border-strong: #cfcfd7;
@@ -37,6 +44,12 @@
 
   --shadow-card: 0 1px 2px rgb(16 16 24 / 0.04), 0 1px 1px rgb(16 16 24 / 0.03);
   --shadow-pop: 0 12px 32px rgb(16 16 24 / 0.14), 0 2px 6px rgb(16 16 24 / 0.08);
+
+  /* How strongly decorative accent glows show. */
+  --glow: 14%;
+  /* Lightness of the generated game covers (OKLCH). */
+  --cover-from: 0.66;
+  --cover-to: 0.47;
 }
 
 [data-theme="dark"] {
@@ -44,6 +57,7 @@
 
   --background: #0a0a0d;
   --card: #111115;
+  --popover: #141418;
   --secondary: #19191e;
   --border: #25252b;
   --border-strong: #34343c;
@@ -64,19 +78,137 @@
 
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
+
+  --glow: 22%;
+  --cover-from: 0.53;
+  --cover-to: 0.35;
 }
 
-/* The console and code views stay dark in both themes, like a terminal. */
+/* The console and code views stay dark in every theme, like a terminal. */
 :root {
   --terminal: #0b0c10;
   --terminal-foreground: #d6d8e0;
   --terminal-muted: #7a7d8c;
   --terminal-border: #1f2028;
+
+  /* Shape, size and density. Overridden per theme below. */
+  --control-radius: 8px;
+  --card-radius: 12px;
+  --shell-max: 80rem;
+  --page-title-size: 1.5rem;
+  --page-title-weight: 600;
+  --page-title-tracking: -0.02em;
+  --cover-height: 5.25rem;
+  /* Applied to cards, dialogs and toasts; only the glass theme blurs. */
+  --surface-filter: none;
+}
+
+/* ------------------------------------------------------------------ Horizon
+ * Top navigation, wide centred content, generous radii and soft depth. */
+[data-layout="horizon"] {
+  --control-radius: 10px;
+  --card-radius: 18px;
+  --shell-max: 90rem;
+  --page-title-size: 1.875rem;
+  --page-title-weight: 700;
+  --page-title-tracking: -0.03em;
+  --cover-height: 6.25rem;
+}
+
+[data-layout="horizon"][data-theme="light"] {
+  --background: #f7f7fb;
+  --shadow-card: 0 1px 2px rgb(16 16 40 / 0.04), 0 10px 30px -16px rgb(49 46 129 / 0.2);
+}
+
+[data-layout="horizon"][data-theme="dark"] {
+  --background: #09090c;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 34px -18px rgb(0 0 0 / 0.9);
+}
+
+/* ------------------------------------------------------------------ Compact
+ * A slim icon rail, smaller type, tighter spacing and corners, flat cards and
+ * tabular numbers everywhere. Scaling the root size keeps the user's own
+ * browser font size in play. */
+[data-layout="compact"] {
+  font-size: 93.75%;
+  font-variant-numeric: tabular-nums;
+  --spacing: 0.234rem;
+  --control-radius: 5px;
+  --card-radius: 7px;
+  --shell-max: 120rem;
+  --page-title-size: 1.25rem;
+  --page-title-tracking: -0.015em;
+  --cover-height: 3.25rem;
+  --shadow-card: none;
+}
+
+[data-layout="compact"][data-theme="light"] {
+  --background: #f3f3f6;
+  --border: #dedee5;
+}
+
+[data-layout="compact"][data-theme="dark"] {
+  --background: #0b0b0e;
+  --card: #121216;
+  --popover: #15151a;
+}
+
+/* -------------------------------------------------------------------- Glass
+ * Translucent, blurred surfaces over a soft indigo mesh. Text sits on
+ * surfaces that stay at least 55% opaque, which keeps it at WCAG AA. */
+[data-layout="glass"] {
+  --control-radius: 10px;
+  --card-radius: 16px;
+  --surface-filter: blur(22px) saturate(160%);
+}
+
+[data-layout="glass"][data-theme="light"] {
+  --background: #eceef8;
+  --card: rgb(255 255 255 / 0.7);
+  --popover: rgb(255 255 255 / 0.9);
+  --secondary: rgb(232 233 245 / 0.75);
+  --border: rgb(30 30 80 / 0.09);
+  --border-strong: rgb(30 30 80 / 0.17);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.75), 0 10px 30px -14px rgb(30 27 75 / 0.22);
+  --mesh-a: 32%;
+  --mesh-b: 22%;
+  --mesh-c: 18%;
+}
+
+[data-layout="glass"][data-theme="dark"] {
+  --background: #07070c;
+  --card: rgb(26 26 38 / 0.58);
+  --popover: rgb(24 24 34 / 0.88);
+  --secondary: rgb(255 255 255 / 0.06);
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.15);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 14px 34px -16px rgb(0 0 0 / 0.85);
+  --mesh-a: 34%;
+  --mesh-b: 20%;
+  --mesh-c: 16%;
+}
+
+/* People who ask for less transparency get solid surfaces. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-layout="glass"][data-theme="light"] {
+    --card: #ffffff;
+    --popover: #ffffff;
+    --secondary: #eeeff6;
+    --surface-filter: none;
+  }
+
+  [data-layout="glass"][data-theme="dark"] {
+    --card: #15151e;
+    --popover: #181822;
+    --secondary: #1d1d28;
+    --surface-filter: none;
+  }
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-card: var(--card);
+  --color-popover: var(--popover);
   --color-secondary: var(--secondary);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
@@ -103,8 +235,8 @@
   --shadow-card: var(--shadow-card);
   --shadow-pop: var(--shadow-pop);
 
-  --radius-control: 8px;
-  --radius-card: 12px;
+  --radius-control: var(--control-radius);
+  --radius-card: var(--card-radius);
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -112,6 +244,9 @@
   --animate-fade-in: fade-in 0.18s ease-out;
   --animate-pop-in: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-slide-in: slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-drawer-in: drawer-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-sheet-in: sheet-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-menu-in: menu-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
 
   @keyframes fade-in {
     from { opacity: 0; }
@@ -126,6 +261,21 @@
   @keyframes slide-in {
     from { opacity: 0; transform: translateX(16px); }
     to { opacity: 1; transform: translateX(0); }
+  }
+
+  @keyframes drawer-in {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+  }
+
+  @keyframes sheet-in {
+    from { opacity: 0; transform: translateY(-12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes menu-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to { opacity: 1; transform: scale(1); }
   }
 }
 
@@ -164,6 +314,70 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+}
+
+@layer components {
+  /* The heading at the top of every page; its scale follows the theme. */
+  .page-title {
+    font-size: var(--page-title-size);
+    font-weight: var(--page-title-weight);
+    letter-spacing: var(--page-title-tracking);
+    line-height: 1.2;
+  }
+
+  /* Cards, dialogs and toasts. Blurs what is behind it in the glass theme. */
+  .surface {
+    -webkit-backdrop-filter: var(--surface-filter);
+    backdrop-filter: var(--surface-filter);
+  }
+
+  /* The dashboard greeting: an accent glow from the top right. */
+  .hero-glow {
+    background: radial-gradient(ellipse 65% 130% at 100% 0%, color-mix(in srgb, var(--primary) var(--glow), transparent), transparent 70%);
+  }
+
+  /* Signed-out pages: the dark brand panel and the glow behind the form. */
+  .auth-brand {
+    background:
+      radial-gradient(ellipse 80% 60% at 85% 50%, rgb(79 70 229 / 0.55), transparent 70%),
+      linear-gradient(160deg, #2e2a7a 0%, #1b1846 55%, #0d0b26 100%);
+  }
+
+  .auth-glow {
+    background:
+      radial-gradient(ellipse 70% 45% at 50% 0%, color-mix(in srgb, var(--primary) var(--glow), transparent), transparent 75%),
+      radial-gradient(ellipse 50% 35% at 50% 100%, color-mix(in srgb, var(--primary) calc(var(--glow) * 0.5), transparent), transparent 75%);
+  }
+
+  /* Horizon: a soft accent glow behind the page header. */
+  .horizon-glow {
+    background:
+      radial-gradient(ellipse 55% 100% at 50% 0%, color-mix(in srgb, var(--primary) var(--glow), transparent), transparent 75%),
+      radial-gradient(ellipse 28% 80% at 88% 0%, color-mix(in srgb, var(--primary) calc(var(--glow) * 0.7), transparent), transparent 75%),
+      radial-gradient(ellipse 24% 70% at 10% 0%, color-mix(in srgb, var(--primary) calc(var(--glow) * 0.5), transparent), transparent 75%);
+  }
+
+  .horizon-grid {
+    background-image: radial-gradient(color-mix(in srgb, var(--foreground) 14%, transparent) 1px, transparent 1.2px);
+    background-size: 22px 22px;
+    -webkit-mask-image: radial-gradient(ellipse 60% 100% at 50% 0%, #000 0%, transparent 80%);
+    mask-image: radial-gradient(ellipse 60% 100% at 50% 0%, #000 0%, transparent 80%);
+  }
+}
+
+/* Glass: the mesh backdrop sits behind the whole page. Static, so blurred
+ * surfaces never have to re-render while it moves. */
+[data-layout="glass"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(42rem 32rem at 8% 0%, color-mix(in srgb, var(--primary) var(--mesh-a), transparent), transparent 70%),
+    radial-gradient(36rem 30rem at 100% 12%, color-mix(in srgb, #7c3aed var(--mesh-b), transparent), transparent 70%),
+    radial-gradient(48rem 36rem at 62% 108%, color-mix(in srgb, #2563eb var(--mesh-c), transparent), transparent 70%),
+    var(--background);
 }
 
 /* Thin, theme-aware scrollbars. */

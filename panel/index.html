@@ -7,14 +7,22 @@
     <meta name="color-scheme" content="dark light" />
     <title>Atlas</title>
     <script>
-      // Apply the saved theme before the first paint so the page never
-      // flashes the wrong colours. Kept in sync with src/context/theme.ts.
+      // Apply the saved mode (light/dark) and theme (layout) before the first
+      // paint so the page never flashes the wrong colours or layout. Kept in
+      // sync with src/context/theme.ts.
       (function () {
         var preference = 'system';
-        try { preference = localStorage.getItem('atlas-theme') || 'system'; } catch (e) {}
+        var layout = 'classic';
+        try {
+          preference = localStorage.getItem('atlas-theme') || 'system';
+          layout = localStorage.getItem('atlas-layout') || 'classic';
+        } catch (e) {}
         var dark = preference === 'dark' ||
           (preference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        if (!/^(classic|horizon|compact|glass)$/.test(layout)) layout = 'classic';
+        var root = document.documentElement;
+        root.setAttribute('data-theme', dark ? 'dark' : 'light');
+        root.setAttribute('data-layout', layout);
       })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
